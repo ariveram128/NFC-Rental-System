@@ -10,6 +10,9 @@
 #include <nfc/ndef/text_rec.h>   // NDEF Text Record specifics
 #include <nfc/ndef/uri_rec.h>    // NDEF URI Record specifics
 
+#include <nfc/t2t/parser.h>        // Correct T2T parser header
+#include <nfc/ndef/msg.h>          // NDEF Message processing
+
 LOG_MODULE_REGISTER(nfc_handler, LOG_LEVEL_INF); // Register module for logging
 
 // --- NDEF Message Buffers ---
@@ -36,14 +39,14 @@ int nfc_reader_init(void)
     // Initialize workqueue for processing
     k_work_init_delayable(&nfc_process_work, nfc_process_work_handler);
 
-    // Initialize NFC Type 2 Tag library
-    err = nfc_t2t_setup(nfc_callback, NULL); // Register our callback
+    // Initialize and start the NFC T2T parser
+    err = nfc_t2t_parse_setup();
     if (err) {
-        LOG_ERR("Cannot setup NFC T2T library (err: %d)", err);
+        LOG_ERR("Cannot setup NFC T2T parser (err: %d)", err);
         return err;
     }
     
-    LOG_INF("NFC T2T library initialized successfully.");
+    LOG_INF("NFC T2T parser initialized successfully.");
     return 0;
 }
 
