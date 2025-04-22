@@ -1,62 +1,80 @@
-# RentScan - Wireless NFC Tag Rental System
+# RentScan - Wireless NFC Tag Rental System (nRF Edition)
 
 **Project for CS/ECE4501 - WiOT Final Project**
 
 ## Overview
 
-RentScan is an ESP32-based system for managing item rentals using NFC tags. Users scan an NFC tag to initiate a rental subscription. The system uses WiFi for network connectivity to send notifications, primarily when a rental period expires or potentially when a rented item moves out of a predefined range.
+RentScan is an nRF52840-based system for managing item rentals using NFC tags. Users scan an NFC tag attached to an item using the nRF52840DK's NFC reader to initiate or manage a rental. The system uses **Bluetooth Low Energy (BLE)** to communicate rental status updates wirelessly to a nearby gateway device. This gateway (which could be another nRF52840DK/Dongle connected to a computer or a smartphone) is responsible for forwarding the data to a backend service for logging and potential notifications (e.g., rental expiration).
 
 ## Key Features
 
-*   **NFC Tag Interaction:** Subscribe to rentals by scanning NFC tags containing item information.
-*   **WiFi Connectivity:** Connects to a local WiFi network for communication.
-*   **Backend Integration (Conceptual):** Sends rental data (tag ID, user, timestamps) to a backend service.
-*   **Expiration Notifications:** The backend triggers notifications when rental periods expire.
-*   **Proximity Notifications (Exploratory):** Investigate and potentially implement notifications based on WiFi signal strength changes to indicate if an item is out of range.
+*   **NFC Tag Interaction:** Utilizes the nRF52840DK's built-in NFC capabilities (Tag Type 4 emulation) to read item information from tags and potentially write rental status back to tags. Uses standard NDEF records.
+*   **BLE Communication:** Sends rental status updates (e.g., Tag ID scanned, start/end time, user info if applicable) wirelessly via BLE advertisements or a GATT connection to a gateway.
+*   **Gateway Bridge (Conceptual/Simulated):** A separate component (e.g., Python script on PC connected to a BLE dongle/DK, or potentially nRF Connect mobile app) receives BLE data and forwards it to a conceptual backend.
+*   **Backend Integration (Conceptual):** Demonstrates sending formatted rental data to a simulated backend endpoint (e.g., printing JSON to gateway's console, sending HTTP POST to `httpbin.org`).
+*   **Expiration Notifications (Simulated):** Logic resides primarily on the nRF52840DK or the conceptual backend to determine when a rental expires based on timestamps. Actual push notifications are out of scope, but status updates sent via BLE can indicate expiration.
 
-## Hardware Requirements (Initial)
+## Hardware Requirements
 
-*   ESP32 Development Board with WiFi
-*   NFC Reader/Writer Module compatible with ESP32 (e.g., PN532, MFRC522 - *Note: MFRC522 is 13.56MHz RFID, might not be fully NFC NDEF compliant, PN532 is generally better for NFC*)
-*   NFC Tags (NTAG21x series recommended for NDEF compatibility)
-*   Jumper Wires
-*   USB Cable for programming and power
+*   **2 x nRF52840DK boards:** One acting as the primary NFC reader/BLE peripheral, the other potentially acting as the BLE central/gateway connected to a PC.
+*   **(Optional) 1 x nRF52840 Dongle:** Can substitute for the second DK as the BLE gateway connected to a PC.
+*   **NFC Antenna:** Attached to the primary nRF52840DK board.
+*   **NFC Tags:** Compatible with NDEF format (e.g., NTAG21x series used in labs).
+*   **USB Cables:** For programming, power, and connecting gateway device to PC.
+*   **(Gateway PC):** A computer to run the BLE listener/forwarder script (if implementing the PC gateway).
 
 ## Software Requirements
 
-*   **IDE:** PlatformIO
-*   **ESP32 Board Support:** ESP32 board package installed in the IDE.
+*   **IDE:** Visual Studio Code with nRF Connect Extension.
+*   **SDK:** **nRF Connect SDK v2.4.3 or v2.5.1** (Confirm based on lab experience - v2.5.1 needed for NFC samples in Prelab 5).
+*   **OS:** Zephyr RTOS.
 *   **Libraries:**
-   *   WiFi libraries (usually built-in with ESP32 Arduino core)
-   *   NFC Library (e.g., Adafruit_PN532, MFRC522-spi-i2c-uart-async) - *To be determined based on specific NFC module*
-   *   ArduinoJson (likely needed for handling data)
-   *   Libraries for communicating with the backend (e.g., HTTPClient)
+    *   Zephyr NFC libraries (for NDEF reading/writing - see Lab 5).
+    *   Zephyr BLE libraries (for peripheral advertising/GATT server on reader node, and central scanning/GATT client on gateway node - see Lab 2).
+    *   (Optional) Python with `bleak` or similar library for PC-based gateway script.
 *   **Version Control:** Git
 
-   ## Getting Started
+## Getting Started
 
-   1.  **Clone the repository:**
-      ```bash
-      git clone https://github.com/arriveram128/NFC-Rental-System.git
-      cd NFC-Rental-System
-      ```
-   2.  **Install IDE and Board Support:** Set up PlatformIO with ESP32 support.
-   3.  **Install Libraries:** Install the required libraries mentioned above via the IDE's library manager.
-   4.  **Hardware Setup:** Connect the NFC module to the ESP32 (wiring details TBD).
-   5.  **Configure WiFi:** Update WiFi credentials (SSID/Password) in the relevant code file (e.g., `config.h` - *we will create this later*).
-   6.  **Build and Upload:** Compile and upload the firmware to the ESP32.
+1.  **Clone the repository:**
+    ```bash
+    git clone https://github.com/arriveram128/NFC-Rental-System.git
+    cd NFC-Rental-System
+    ```
+2.  **Install IDE and SDK:** Set up VS Code with the correct nRF Connect SDK version.
+3.  **Hardware Setup:** Attach NFC antenna to the primary DK board. Connect DK boards/dongle via USB.
+4.  **Develop Firmware:** Use Zephyr examples (NFC record text/writable NDEF, BLE peripheral, BLE central) as starting points.
+5.  **Build and Upload:** Compile and flash firmware to the nRF52840DK boards using VS Code.
+6.  **(If using PC Gateway):** Develop Python script to scan for BLE data and forward/print it.
 
    ## Project Structure (Planned)
 
    ```
-   ├── src/                    # Main source code (.ino or .cpp files)
-   ├── include/                # Header files (.h)
-   ├── lib/                    # Project-specific libraries (if any)
-   ├── data/                   # Files for SPIFFS/LittleFS (e.g., web interface assets)
-   ├── docs/                   # Documentation files
-   ├── .gitignore              # Specifies intentionally untracked files that Git should ignore
-   ├── platformio.ini          # PlatformIO project configuration (if using PlatformIO)
-   └── README.md               # This file
+    NFC-Rental-System/
+   ├── main_application/
+   │   ├── src/
+   │   │   ├── main.c              # Main application logic
+   │   │   ├── nfc_handler.c       # NFC-specific code
+   │   │   ├── ble_handler.c       # BLE-specific code
+   │   │   └── rental_logic.c      # Rental system business logic
+   │   ├── include/
+   │   │   ├── nfc_handler.h
+   │   │   ├── ble_handler.h
+   │   │   └── rental_logic.h
+   │   ├── CMakeLists.txt
+   │   └── prj.conf
+   ├── ble_gateway/
+   │   ├── src/
+   │   ├── CMakeLists.txt
+   │   └── prj.conf
+   ├── samples_reference/           # Keep original samples for reference
+   │   ├── tag_reader/
+   │   ├── peripheral_uart/
+   │   └── central_uart/
+   ├── docs/
+   ├── tests/                      # Add unit tests here
+   ├── .gitignore
+   └── README.md
    ```
 
    ## Branching Strategy
