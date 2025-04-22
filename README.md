@@ -50,18 +50,31 @@ RentScan is an nRF52840-based system for managing item rentals using NFC tags. U
    ## Project Structure (Planned)
 
    ```
-    ├── nfc_reader_ble_peripheral/ # Firmware for the main device
-    │ ├── src/
-    │ ├── prj.conf
-    │ └── CMakeLists.txt
-    ├── ble_gateway/ # Firmware or script for the gateway
-    │ ├── src/ # (If using DK/Dongle)
-    │ ├── prj.conf # (If using DK/Dongle)
-    │ ├── CMakeLists.txt # (If using DK/Dongle)
-    │ └── gateway_script.py # (If using PC script)
-    ├── docs/ # Documentation files
-    ├── .gitignore # Specifies intentionally untracked files that Git should ignore
-    └── README.md # This file
+    NFC-Rental-System/
+   ├── main_application/
+   │   ├── src/
+   │   │   ├── main.c              # Main application logic
+   │   │   ├── nfc_handler.c       # NFC-specific code
+   │   │   ├── ble_handler.c       # BLE-specific code
+   │   │   └── rental_logic.c      # Rental system business logic
+   │   ├── include/
+   │   │   ├── nfc_handler.h
+   │   │   ├── ble_handler.h
+   │   │   └── rental_logic.h
+   │   ├── CMakeLists.txt
+   │   └── prj.conf
+   ├── ble_gateway/
+   │   ├── src/
+   │   ├── CMakeLists.txt
+   │   └── prj.conf
+   ├── samples_reference/           # Keep original samples for reference
+   │   ├── tag_reader/
+   │   ├── peripheral_uart/
+   │   └── central_uart/
+   ├── docs/
+   ├── tests/                      # Add unit tests here
+   ├── .gitignore
+   └── README.md
    ```
 
    ## Branching Strategy
