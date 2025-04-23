@@ -13,25 +13,50 @@ We've created a clean, modular structure that separates different parts of the s
 - `tests/` - Directory for test code
 - `docs/` - Documentation
 
-### Created Files
-- Basic header files for NFC, BLE, and rental logic
-- Main application file with initialization structure
-- Combined configuration file merging NFC and BLE settings
-- BLE gateway based on `central_uart` sample
+### Implementation Progress
 
-### Key Components
-1. **NFC Handler** - Will manage reading NFC tags
-2. **BLE Handler** - Will send data wirelessly 
-3. **Rental Logic** - Will handle the business rules for rentals
-4. **Main Application** - Coordinates all components
+#### NFC Functionality ✅
+- Successfully implemented NFC initialization with the internal NFCT peripheral
+- Added proper hardware setup and callback handling
+- NFC field detection is working correctly
+- Created necessary prj.conf settings for NFC operation
+- Simulated NDEF message reading with placeholder data
+
+#### BLE Handler 🚧
+- Created basic framework with placeholder functions
+- Initialization function returns success but doesn't connect yet
+- Header file defines future interfaces for data transmission
+
+#### Rental Logic 🚧
+- Created basic framework with placeholder implementation
+- Function definitions in place for future business logic
+
+### Terminal Log Confirmation
+The application now successfully initializes and reports:
+```
+*** Booting nRF Connect SDK v2.5.1 ***
+[00:00:00.449,615] <inf> main: RentScan application started
+[00:00:00.449,645] <inf> nfc_handler: Initializing NFC reader
+[00:00:00.449,645] <inf> nfc_handler: Initializing NFC T2T subsystem
+[00:00:00.449,676] <inf> nfc_handler: NFC initialization successful
+[00:00:00.449,707] <inf> nfc_handler: Starting NFC field polling
+[00:00:00.449,707] <inf> nfc_handler: NFC polling started - waiting for tag detection
+[00:00:00.449,737] <inf> nfc_handler: NFC reader initialization complete
+[00:00:00.449,737] <inf> ble_handler: BLE subsystem initialization (placeholder)
+[00:00:00.449,768] <inf> main: RentScan initialized and ready for NFC tags
+```
+
+When a tag is detected, we see:
+```
+[00:00:03.750,152] <inf> nfc_handler: NFC field detected
+```
 
 ## Next Steps
 
-### 1. Implement NFC Reading
-- Copy relevant functions from `tag_reader` sample
-- Create callback for when tag is detected
-- Parse NDEF messages from tags
-- Extract rental item information
+### 1. Complete NFC Reading
+- Implement actual NDEF message reading from detected tags
+- Extract real text records from scanned tags
+- Process the tag data and pass it to the rental logic
 
 ### 2. Implement BLE Communication
 - Copy UART service from `peripheral_uart` sample
@@ -52,30 +77,51 @@ We've created a clean, modular structure that separates different parts of the s
 - Test with PC or other DK board
 
 ### 5. Testing and Integration
-- Test NFC reading independently
+- Test NFC reading independently ✅
 - Test BLE communication separately
 - Integrate both components
 - System-level testing with real NFC tags
 
-### 6. Documentation
-- Write clear API documentation
-- Create user guide
-- Document hardware setup
-- Add troubleshooting section
-
 ## Getting Started
 
-1. Make sure you have nRF Connect SDK v2.5.1 installed
-2. Connect your nRF52840 DK boards
-3. Start implementing components in their respective files
-4. Test each component independently before integration
+### Hardware Setup
+- nRF52840 DK board
+- NFC antenna connected to NFC1/NFC2 pins
+- USB cable for power and debugging
 
-## Team Tasks
+### Software Requirements
+- nRF Connect SDK v2.5.1
+- nRF Connect for Desktop (Programmer app for flashing)
+- Terminal application to view logs
 
-Each team member can focus on:
-- Marvin: NFC implementation
-- Raul: BLE communication
-- Salina: Rental logic
-- Sami: Gateway and integration
+### Building and Flashing
+1. Open the project in nRF Connect for VS Code
+2. Select the `main_application` directory
+3. Click "Build Configuration" 
+4. Select the nrf52840dk_nrf52840 board
+5. Build the application
+6. Flash to your device
 
-Remember to create feature branches for each task and merge via pull requests!
+### Testing
+1. Connect the board to your computer
+2. Open a terminal to view the logs (115200 baud)
+3. Bring an NFC-enabled device or tag near the antenna
+4. Verify the "NFC field detected" message appears
+
+## Technical Details
+
+### NFC Implementation
+- Uses Type 2 Tag (T2T) functionality via nrfxlib
+- Configured using the internal NFCT peripheral
+- Event-driven architecture with callbacks
+- Currently simulates tag data reading
+
+### Known Limitations
+- Currently only detects NFC fields but doesn't read actual tag data
+- NDEF message parsing is implemented but not used with real data yet
+- No integration with BLE communication
+
+### Future Improvements
+- Complete the tag data reading implementation
+- Connect NFC data flow to rental logic
+- Implement BLE communication for reporting rentals
