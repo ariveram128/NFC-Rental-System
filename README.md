@@ -1,100 +1,89 @@
-# RentScan - Wireless NFC Tag Rental System (nRF Edition)
+# RentScan Wi-Fi Setup Implementation README
 
-**Project for CS/ECE4501 - WiOT Final Project**
+This document outlines the files you need to add or modify to implement Wi-Fi functionality in the RentScan NFC Tag Rental System project.
 
-## Overview
+## Files to Add
 
-RentScan is an nRF52840-based system for managing item rentals using NFC tags. Users scan an NFC tag attached to an item using the nRF52840DK's NFC reader to initiate or manage a rental. The system uses **Bluetooth Low Energy (BLE)** to communicate rental status updates wirelessly to a nearby gateway device. This gateway (which could be another nRF52840DK/Dongle connected to a computer or a smartphone) is responsible for forwarding the data to a backend service for logging and potential notifications (e.g., rental expiration).
+### 1. wifi_handler.h
+**Location**: `main_application/include/`
 
-## Key Features
+**Purpose**: 
+- Defines the public API for the Wi-Fi functionality
+- Contains function declarations for:
+  - Wi-Fi initialization
+  - Network connection management
+  - Connection status checking
+  - Data transmission to server
+- Provides a clean interface for the main application to use Wi-Fi features
 
-*   **NFC Tag Interaction:** Utilizes the nRF52840DK's built-in NFC capabilities (Tag Type 4 emulation) to read item information from tags and potentially write rental status back to tags. Uses standard NDEF records.
-*   **BLE Communication:** Sends rental status updates (e.g., Tag ID scanned, start/end time, user info if applicable) wirelessly via BLE advertisements or a GATT connection to a gateway.
-*   **Gateway Bridge (Conceptual/Simulated):** A separate component (e.g., Python script on PC connected to a BLE dongle/DK, or potentially nRF Connect mobile app) receives BLE data and forwards it to a conceptual backend.
-*   **Backend Integration (Conceptual):** Demonstrates sending formatted rental data to a simulated backend endpoint (e.g., printing JSON to gateway's console, sending HTTP POST to `httpbin.org`).
-*   **Expiration Notifications (Simulated):** Logic resides primarily on the nRF52840DK or the conceptual backend to determine when a rental expires based on timestamps. Actual push notifications are out of scope, but status updates sent via BLE can indicate expiration.
+### 2. wifi_handler.c
+**Location**: `main_application/src/`
 
-## Hardware Requirements
+**Purpose**:
+- Implements all Wi-Fi functionality declared in the header
+- Manages the Wi-Fi network interface
+- Handles connection and disconnection events
+- Provides HTTP client functionality to communicate with backend servers
+- Implements error handling and recovery mechanisms
 
-*   **2 x nRF52840DK boards:** One acting as the primary NFC reader/BLE peripheral, the other potentially acting as the BLE central/gateway connected to a PC.
-*   **(Optional) 1 x nRF52840 Dongle:** Can substitute for the second DK as the BLE gateway connected to a PC.
-*   **NFC Antenna:** Attached to the primary nRF52840DK board.
-*   **NFC Tags:** Compatible with NDEF format (e.g., NTAG21x series used in labs).
-*   **USB Cables:** For programming, power, and connecting gateway device to PC.
-*   **(Gateway PC):** A computer to run the BLE listener/forwarder script (if implementing the PC gateway).
+## Files to Modify
 
-## Software Requirements
+### 1. prj.conf
+**Purpose of modifications**:
+- Enable networking subsystem in Zephyr
+- Configure TCP/IP stack
+- Enable Wi-Fi drivers and management
+- Configure network buffers and memory allocation
+- Enable HTTP client for server communication
 
-*   **IDE:** Visual Studio Code with nRF Connect Extension.
-*   **SDK:** **nRF Connect SDK v2.4.3 or v2.5.1** (Confirm based on lab experience - v2.5.1 needed for NFC samples in Prelab 5).
-*   **OS:** Zephyr RTOS.
-*   **Libraries:**
-    *   Zephyr NFC libraries (for NDEF reading/writing - see Lab 5).
-    *   Zephyr BLE libraries (for peripheral advertising/GATT server on reader node, and central scanning/GATT client on gateway node - see Lab 2).
-    *   (Optional) Python with `bleak` or similar library for PC-based gateway script.
-*   **Version Control:** Git
+**Key configurations to add**:
+- Networking configurations
+- Wi-Fi driver settings
+- Network management event handling
+- HTTP client support
 
-## Getting Started
+### 2. main.c
+**Purpose of modifications**:
+- Include the new Wi-Fi header
+- Initialize the Wi-Fi subsystem during startup
+- Connect to a Wi-Fi network using credentials
+- Send rental data over Wi-Fi when an NFC tag is detected
+- Handle Wi-Fi connectivity errors appropriately
 
-1.  **Clone the repository:**
-    ```bash
-    git clone https://github.com/arriveram128/NFC-Rental-System.git
-    cd NFC-Rental-System
-    ```
-2.  **Install IDE and SDK:** Set up VS Code with the correct nRF Connect SDK version.
-3.  **Hardware Setup:** Attach NFC antenna to the primary DK board. Connect DK boards/dongle via USB.
-4.  **Develop Firmware:** Use Zephyr examples (NFC record text/writable NDEF, BLE peripheral, BLE central) as starting points.
-5.  **Build and Upload:** Compile and flash firmware to the nRF52840DK boards using VS Code.
-6.  **(If using PC Gateway):** Develop Python script to scan for BLE data and forward/print it.
+**Key additions**:
+- Wi-Fi credentials definitions
+- Initialization code
+- Integration with NFC tag processing flow
 
-   ## Project Structure (Planned)
+### 3. CMakeLists.txt
+**Purpose of modifications**:
+- Add the new Wi-Fi handler source file to the build
+- Ensure all required libraries are linked
 
-   ```
-    NFC-Rental-System/
-   ├── main_application/
-   │   ├── src/
-   │   │   ├── main.c              # Main application logic
-   │   │   ├── nfc_handler.c       # NFC-specific code
-   │   │   ├── ble_handler.c       # BLE-specific code
-   │   │   └── rental_logic.c      # Rental system business logic
-   │   ├── include/
-   │   │   ├── nfc_handler.h
-   │   │   ├── ble_handler.h
-   │   │   └── rental_logic.h
-   │   ├── CMakeLists.txt
-   │   └── prj.conf
-   ├── ble_gateway/
-   │   ├── src/
-   │   ├── CMakeLists.txt
-   │   └── prj.conf
-   ├── samples_reference/           # Keep original samples for reference
-   │   ├── tag_reader/
-   │   ├── peripheral_uart/
-   │   └── central_uart/
-   ├── docs/
-   ├── tests/                      # Add unit tests here
-   ├── .gitignore
-   └── README.md
-   ```
+## Implementation Requirements
 
-   ## Branching Strategy
+The Wi-Fi implementation should:
+1. Initialize properly on system startup
+2. Connect to configured Wi-Fi networks automatically
+3. Reconnect if the connection is lost
+4. Provide clear status information on connection state
+5. Efficiently transmit rental data to a backend server
+6. Work alongside the existing BLE communication path
+7. Use proper error handling and logging
 
-   *   `main`: Stable releases.
-   *   `develop`: Main development branch. Features are merged here.
-   *   `feature/weekX-task-name`: Branches for specific features/tasks, based on `develop`.
+## Hardware Considerations
 
-   ## Contributing
+- The implementation assumes Wi-Fi hardware is connected to the nRF52840DK
+- Options include:
+  - nRF7002 Expansion Board (preferred)
+  - External ESP32/ESP8266 module connected via UART
 
-   Please follow standard Git workflow:
-   1.  Create a feature branch off `develop`.
-   2.  Make your changes.
-   3.  Commit and push your feature branch.
-   4.  Create a Pull Request (PR) on GitHub to merge into `develop`.
-   5.  Ensure code builds and is reasonably tested before creating a PR.
+## Testing Procedure
 
-   ## Team
+1. Build the project with the new Wi-Fi files
+2. Flash to the primary nRF52840DK
+3. Monitor logs to verify Wi-Fi initialization and connection
+4. Test NFC tag scanning to ensure data is sent over Wi-Fi
+5. Verify receipt of data on the backend server
 
-   *   Marvin Rivera | ariveram128
-   *   Raul Cancho    | RaulCancho
-   *   Salina Tran    | dinosaur-sal
-   *   Sami Kang      | skang0812
+Following these instructions will add Wi-Fi capability to your RentScan system, allowing it to communicate rental data directly to backend servers without relying solely on the BLE gateway.
