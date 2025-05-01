@@ -1,100 +1,140 @@
-# RentScan - Wireless NFC Tag Rental System (nRF Edition)
+# RentScan Project Status
 
-**Project for CS/ECE4501 - WiOT Final Project**
+## Current Status (April 21st, 2025)
 
-## Overview
+### Project Structure
+We've created a clean, modular structure that separates different parts of the system:
+- `main_application/` - The core rental system
+  - `src/` - Source code files
+  - `include/` - Header files
+  - `prj.conf` - Configuration settings
+- `ble_gateway/` - The receiving device (central)
+- `samples_reference/` - Original samples kept for reference
+- `tests/` - Directory for test code
+- `docs/` - Documentation
 
-RentScan is an nRF52840-based system for managing item rentals using NFC tags. Users scan an NFC tag attached to an item using the nRF52840DK's NFC reader to initiate or manage a rental. The system uses **Bluetooth Low Energy (BLE)** to communicate rental status updates wirelessly to a nearby gateway device. This gateway (which could be another nRF52840DK/Dongle connected to a computer or a smartphone) is responsible for forwarding the data to a backend service for logging and potential notifications (e.g., rental expiration).
+### Implementation Progress
 
-## Key Features
+#### NFC Functionality ✅
+- Successfully implemented NFC initialization with the internal NFCT peripheral
+- Added proper hardware setup and callback handling
+- NFC field detection is working correctly
+- Created necessary prj.conf settings for NFC operation
+- Simulated NDEF message reading with placeholder data
 
-*   **NFC Tag Interaction:** Utilizes the nRF52840DK's built-in NFC capabilities (Tag Type 4 emulation) to read item information from tags and potentially write rental status back to tags. Uses standard NDEF records.
-*   **BLE Communication:** Sends rental status updates (e.g., Tag ID scanned, start/end time, user info if applicable) wirelessly via BLE advertisements or a GATT connection to a gateway.
-*   **Gateway Bridge (Conceptual/Simulated):** A separate component (e.g., Python script on PC connected to a BLE dongle/DK, or potentially nRF Connect mobile app) receives BLE data and forwards it to a conceptual backend.
-*   **Backend Integration (Conceptual):** Demonstrates sending formatted rental data to a simulated backend endpoint (e.g., printing JSON to gateway's console, sending HTTP POST to `httpbin.org`).
-*   **Expiration Notifications (Simulated):** Logic resides primarily on the nRF52840DK or the conceptual backend to determine when a rental expires based on timestamps. Actual push notifications are out of scope, but status updates sent via BLE can indicate expiration.
+#### BLE Handler 🚧
+- Created basic framework with placeholder functions
+- Initialization function returns success but doesn't connect yet
+- Header file defines future interfaces for data transmission
 
-## Hardware Requirements
+#### Rental Logic 🚧
+- Created basic framework with placeholder implementation
+- Function definitions in place for future business logic
 
-*   **2 x nRF52840DK boards:** One acting as the primary NFC reader/BLE peripheral, the other potentially acting as the BLE central/gateway connected to a PC.
-*   **(Optional) 1 x nRF52840 Dongle:** Can substitute for the second DK as the BLE gateway connected to a PC.
-*   **NFC Antenna:** Attached to the primary nRF52840DK board.
-*   **NFC Tags:** Compatible with NDEF format (e.g., NTAG21x series used in labs).
-*   **USB Cables:** For programming, power, and connecting gateway device to PC.
-*   **(Gateway PC):** A computer to run the BLE listener/forwarder script (if implementing the PC gateway).
+### Terminal Log Confirmation
+The application now successfully initializes and reports:
+```
+*** Booting nRF Connect SDK v2.5.1 ***
+[00:00:00.449,615] <inf> main: RentScan application started
+[00:00:00.449,645] <inf> nfc_handler: Initializing NFC reader
+[00:00:00.449,645] <inf> nfc_handler: Initializing NFC T2T subsystem
+[00:00:00.449,676] <inf> nfc_handler: NFC initialization successful
+[00:00:00.449,707] <inf> nfc_handler: Starting NFC field polling
+[00:00:00.449,707] <inf> nfc_handler: NFC polling started - waiting for tag detection
+[00:00:00.449,737] <inf> nfc_handler: NFC reader initialization complete
+[00:00:00.449,737] <inf> ble_handler: BLE subsystem initialization (placeholder)
+[00:00:00.449,768] <inf> main: RentScan initialized and ready for NFC tags
+```
 
-## Software Requirements
+When a tag is detected, we see:
+```
+[00:00:03.750,152] <inf> nfc_handler: NFC field detected
+```
+### Completed NFC Reading
+- Implement actual NDEF message reading from detected tags
+- Extract real text records from scanned tags
+- Process the tag data and pass it to the rental logic
 
-*   **IDE:** Visual Studio Code with nRF Connect Extension.
-*   **SDK:** **nRF Connect SDK v2.4.3 or v2.5.1** (Confirm based on lab experience - v2.5.1 needed for NFC samples in Prelab 5).
-*   **OS:** Zephyr RTOS.
-*   **Libraries:**
-    *   Zephyr NFC libraries (for NDEF reading/writing - see Lab 5).
-    *   Zephyr BLE libraries (for peripheral advertising/GATT server on reader node, and central scanning/GATT client on gateway node - see Lab 2).
-    *   (Optional) Python with `bleak` or similar library for PC-based gateway script.
-*   **Version Control:** Git
+### Terminal Log Confirmation 
+The application now successfully initializes and reports:
+'''
+*** Booting Zephyr OS build v3.3.99-ncs1-2 ***
+[00:00:00.389,465] <inf> main: RentScan application started
+[00:00:00.389,495] <inf> nfc_handler: Initializing NFC tag
+[00:00:00.389,587] <inf> nfc_handler: NFC tag initialized with item ID: item123
+[00:00:00.389,587] <inf> ble_handler: BLE subsystem initialization (placeholder)
+[00:00:00.389,617] <inf> main: RentScan initialized and ready for NFC tags
+[00:00:14.502,075] <inf> nfc_handler: NFC field detected
+[00:00:14.641,174] <inf> nfc_handler: NFC tag read by external reader
+[00:00:14.656,799] <inf> nfc_handler: NFC field lost
+'''
+
+## Next Steps
+
+### 1. Implement BLE Communication
+- Copy UART service from `peripheral_uart` sample
+- Create function to send rental data over BLE
+- Set up advertising with "RentScan" name
+- Implement connection handling
+
+### 2. Create Rental Business Logic
+- Define rental data structure (item ID, start time, duration)
+- Implement rental start/stop functionality
+- Add expiration checking
+- Handle edge cases (duplicate scans, etc.)
+
+### 3. Complete BLE Gateway
+- Modify scanning to look for "RentScan" devices
+- Implement data receiving and parsing
+- Add logging/forwarding to conceptual backend
+- Test with PC or other DK board
+
+### 4. Testing and Integration
+- Test NFC reading independently ✅
+- Test BLE communication separately
+- Integrate both components
+- System-level testing with real NFC tags
 
 ## Getting Started
 
-1.  **Clone the repository:**
-    ```bash
-    git clone https://github.com/arriveram128/NFC-Rental-System.git
-    cd NFC-Rental-System
-    ```
-2.  **Install IDE and SDK:** Set up VS Code with the correct nRF Connect SDK version.
-3.  **Hardware Setup:** Attach NFC antenna to the primary DK board. Connect DK boards/dongle via USB.
-4.  **Develop Firmware:** Use Zephyr examples (NFC record text/writable NDEF, BLE peripheral, BLE central) as starting points.
-5.  **Build and Upload:** Compile and flash firmware to the nRF52840DK boards using VS Code.
-6.  **(If using PC Gateway):** Develop Python script to scan for BLE data and forward/print it.
+### Hardware Setup
+- nRF52840 DK board
+- NFC antenna connected to NFC1/NFC2 pins
+- USB cable for power and debugging
 
-   ## Project Structure (Planned)
+### Software Requirements
+- nRF Connect SDK v2.5.1
+- nRF Connect for Desktop (Programmer app for flashing)
+- Terminal application to view logs
 
-   ```
-    NFC-Rental-System/
-   ├── main_application/
-   │   ├── src/
-   │   │   ├── main.c              # Main application logic
-   │   │   ├── nfc_handler.c       # NFC-specific code
-   │   │   ├── ble_handler.c       # BLE-specific code
-   │   │   └── rental_logic.c      # Rental system business logic
-   │   ├── include/
-   │   │   ├── nfc_handler.h
-   │   │   ├── ble_handler.h
-   │   │   └── rental_logic.h
-   │   ├── CMakeLists.txt
-   │   └── prj.conf
-   ├── ble_gateway/
-   │   ├── src/
-   │   ├── CMakeLists.txt
-   │   └── prj.conf
-   ├── samples_reference/           # Keep original samples for reference
-   │   ├── tag_reader/
-   │   ├── peripheral_uart/
-   │   └── central_uart/
-   ├── docs/
-   ├── tests/                      # Add unit tests here
-   ├── .gitignore
-   └── README.md
-   ```
+### Building and Flashing
+1. Open the project in nRF Connect for VS Code
+2. Select the `main_application` directory
+3. Click "Build Configuration" 
+4. Select the nrf52840dk_nrf52840 board
+5. Build the application
+6. Flash to your device
 
-   ## Branching Strategy
+### Testing
+1. Connect the board to your computer
+2. Open a terminal to view the logs (115200 baud)
+3. Bring an NFC-enabled device or tag near the antenna
+4. Verify the "NFC field detected" message appears
 
-   *   `main`: Stable releases.
-   *   `develop`: Main development branch. Features are merged here.
-   *   `feature/weekX-task-name`: Branches for specific features/tasks, based on `develop`.
+## Technical Details
 
-   ## Contributing
+### NFC Implementation
+- Uses Type 2 Tag (T2T) functionality via nrfxlib
+- Configured using the internal NFCT peripheral
+- Event-driven architecture with callbacks
+- Currently simulates tag data reading
 
-   Please follow standard Git workflow:
-   1.  Create a feature branch off `develop`.
-   2.  Make your changes.
-   3.  Commit and push your feature branch.
-   4.  Create a Pull Request (PR) on GitHub to merge into `develop`.
-   5.  Ensure code builds and is reasonably tested before creating a PR.
+### Known Limitations
+- Currently only detects NFC fields but doesn't read actual tag data
+- NDEF message parsing is implemented but not used with real data yet
+- No integration with BLE communication
 
-   ## Team
-
-   *   Marvin Rivera | ariveram128
-   *   Raul Cancho    | RaulCancho
-   *   Salina Tran    | dinosaur-sal
-   *   Sami Kang      | skang0812
+### Future Improvements
+- Complete the tag data reading implementation
+- Connect NFC data flow to rental logic
+- Implement BLE communication for reporting rentals
