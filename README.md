@@ -57,7 +57,7 @@ When a tag is detected, we see:
 
 ### Terminal Log Confirmation 
 The application now successfully initializes and reports:
-'''
+```
 *** Booting Zephyr OS build v3.3.99-ncs1-2 ***
 [00:00:00.389,465] <inf> main: RentScan application started
 [00:00:00.389,495] <inf> nfc_handler: Initializing NFC tag
@@ -67,7 +67,7 @@ The application now successfully initializes and reports:
 [00:00:14.502,075] <inf> nfc_handler: NFC field detected
 [00:00:14.641,174] <inf> nfc_handler: NFC tag read by external reader
 [00:00:14.656,799] <inf> nfc_handler: NFC field lost
-'''
+```
 
 ## Next Steps
 
