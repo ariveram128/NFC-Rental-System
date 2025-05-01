@@ -1,6 +1,6 @@
 # RentScan Project Status
 
-## Current Status (April 21st, 2025)
+## Current Status (May 1st, 2025)
 
 ### Project Structure
 We've created a clean, modular structure that separates different parts of the system:
@@ -50,7 +50,7 @@ When a tag is detected, we see:
 ```
 [00:00:03.750,152] <inf> nfc_handler: NFC field detected
 ```
-### Completed NFC Reading
+#### Completed NFC Reading
 - Implement actual NDEF message reading from detected tags
 - Extract real text records from scanned tags
 - Process the tag data and pass it to the rental logic
@@ -68,6 +68,7 @@ The application now successfully initializes and reports:
 [00:00:14.641,174] <inf> nfc_handler: NFC tag read by external reader
 [00:00:14.656,799] <inf> nfc_handler: NFC field lost
 ```
+NFC field is lost after scanning the NFC tag, but all the information is already in the NFC tools app on a phone. 
 
 ## Next Steps
 
