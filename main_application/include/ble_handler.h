@@ -12,7 +12,7 @@
  *
  * @return 0 on success, negative error code otherwise
  */
-int ble_init(void);
+int ble_handler_init(void);
 
 /**
  * @brief Send rental data over BLE
@@ -22,5 +22,15 @@ int ble_init(void);
  * @return 0 on success, negative error code otherwise
  */
 int ble_send_rental_data(const char *tag_id, uint32_t timestamp);
+
+
+/**
+ * @brief Send a message over BLE UART service
+ *
+ * @param msg The message to send
+ * @return 0 on success, negative errno otherwise
+ */
+int ble_send(const char *msg);
+
 
 #endif /* BLE_HANDLER_H */

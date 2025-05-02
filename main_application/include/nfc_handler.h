@@ -61,5 +61,17 @@
   */
  int nfc_handle_tag_detected(char *item_id, size_t max_len);
  
+
+ /**
+ * @brief Update the item ID in the NFC tag
+ *
+ * @param new_id The new item ID to set
+ * @param id_len Length of the new item ID
+ * @return 0 on success, negative errno otherwise
+ */
+int nfc_update_item_id(const char *new_id, size_t id_len);
+
+
+
  #endif /* NFC_HANDLER_H */
  

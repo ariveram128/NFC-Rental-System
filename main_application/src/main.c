@@ -1,46 +1,70 @@
-/*
- * Copyright (c) 2023 Nordic Semiconductor ASA
- *
- * SPDX-License-Identifier: Apache-2.0
- */
+/* main.c - RentScan NFC Tag Reader Application */
 
+/*
+ * Copyright (c) 2019 Nordic Semiconductor ASA
+ * Copyright (c) 2025 RentScan Project Team
+ *
+ * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
+ */
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
-#include "nfc_handler.h"
+#include <zephyr/bluetooth/bluetooth.h>
+#include <zephyr/settings/settings.h>
+
 #include "ble_handler.h"
-#include "rental_logic.h"
+#include "nfc_handler.h"
 
 LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
 
-#define MAX_ITEM_ID_LEN 64
+/* Simple status check function to send periodic BLE messages */
+void status_loop(void)
+{
+    int counter = 0;
+    while (1) {
+        char msg[32];
+        snprintf(msg, sizeof(msg), "STATUS UPDATE: %d", counter++);
+        ble_send(msg);
+        k_sleep(K_SECONDS(10));  // Check every 10 seconds
+    }
+}
 
 int main(void)
 {
     int err;
 
-    LOG_INF("RentScan application started");
+    LOG_INF("=== RentScan Application Booting ===");
 
+    /* Enable Bluetooth */
+    err = bt_enable(NULL);
+    if (err) {
+        LOG_ERR("Bluetooth initialization failed (err %d)", err);
+        return 0;
+    }
+    LOG_INF("Bluetooth initialized");
+
+    /* Load saved BLE settings if enabled */
+    if (IS_ENABLED(CONFIG_SETTINGS)) {
+        settings_load();
+    }
+
+    /* Initialize BLE advertising + NUS service */
+    err = ble_handler_init();
+    if (err) {
+        LOG_ERR("BLE handler initialization failed (err %d)", err);
+        return 0;
+    }
+    
     /* Initialize NFC reader */
     err = nfc_reader_init();
     if (err) {
-        LOG_ERR("Failed to initialize NFC reader: %d", err);
-        return -1;
-    }
-
-    /* Initialize BLE subsystem (placeholder for future) */
-    err = ble_init();
-    if (err) {
-        LOG_ERR("Failed to initialize BLE: %d", err);
-        /* Continue without BLE for now */
+        LOG_ERR("NFC reader initialization failed (err %d)", err);
+        return 0;
     }
 
     LOG_INF("RentScan initialized and ready for NFC tags");
 
-    /* Main application loop */
-    while (1) {
-        /* Process any pending events and sleep */
-        k_sleep(K_MSEC(1000));
-    }
+    /* Start periodic status updates via BLE */
+    status_loop();
 
     return 0;
-} 
+}
