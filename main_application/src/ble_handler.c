@@ -49,9 +49,10 @@ static void nus_receive_cb(struct bt_conn *conn, const uint8_t *data, uint16_t l
 }
 
 // Callback for when NUS notifications are enabled or disabled
-static void nus_notify_cb(enum bt_nus_send_status status)
+static void nus_sent_cb(struct bt_conn *conn)
 {
-    if (status == BT_NUS_SEND_STATUS_ENABLED) {
+    // We know notifications are enabled if we can send data
+    if (!notifications_enabled) {
         LOG_INF("✅ NUS notifications enabled by central");
         notifications_enabled = true;
         
@@ -59,15 +60,12 @@ static void nus_notify_cb(enum bt_nus_send_status status)
         char welcome_msg[50];
         snprintf(welcome_msg, sizeof(welcome_msg), "RentScan ready for scanning at %u", k_uptime_get_32() / 1000);
         ble_send(welcome_msg);
-    } else if (status == BT_NUS_SEND_STATUS_DISABLED) {
-        LOG_INF("❌ NUS notifications disabled by central");
-        notifications_enabled = false;
     }
 }
 
 static struct bt_nus_cb nus_cb = {
     .received = nus_receive_cb,
-    .notify = nus_notify_cb,
+    .sent = nus_sent_cb,
 };
 
 int ble_handler_init(void)
@@ -107,6 +105,11 @@ int ble_send(const char *msg)
     if (!current_conn) {
         LOG_WRN("No BLE connection, cannot send");
         return -ENOTCONN;
+    }
+    
+    if (!notifications_enabled) {
+        LOG_WRN("BLE notifications not enabled by central");
+        return -EINVAL;
     }
 
     int err = bt_nus_send(current_conn, msg, strlen(msg));
