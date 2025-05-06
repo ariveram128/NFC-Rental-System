@@ -33,6 +33,11 @@ static uint16_t nus_tx_handle;
 static struct bt_gatt_subscribe_params nus_tx_subscribe_params;
 static bool device_found_flag;
 
+// Forward declarations
+static uint8_t discover_func(struct bt_conn *conn,
+                         const struct bt_gatt_attr *attr,
+                         struct bt_gatt_discover_params *params);
+
 // Callback for receiving notifications from the NUS TX characteristic
 static uint8_t nus_notify_callback(struct bt_conn *conn,
                               struct bt_gatt_subscribe_params *params,
@@ -77,6 +82,68 @@ static int send_to_peripheral(const char *data, uint16_t len)
 
     return bt_gatt_write(default_conn, &write_params);
 }
+
+static void connected(struct bt_conn *conn, uint8_t conn_err)
+{
+    char addr[BT_ADDR_LE_STR_LEN];
+    int err;
+
+    bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
+
+    if (conn_err) {
+        printk("Failed to connect to %s (%u)\n", addr, conn_err);
+
+        bt_conn_unref(default_conn);
+        default_conn = NULL;
+
+        start_scan();
+        return;
+    }
+
+    printk("Connected: %s\n", addr);
+
+    if (conn == default_conn) {
+        // Start service discovery right away
+        discover_params.uuid = search_service_uuid;
+        discover_params.func = discover_func;
+        discover_params.start_handle = BT_ATT_FIRST_ATTRIBUTE_HANDLE;
+        discover_params.end_handle = BT_ATT_LAST_ATTRIBUTE_HANDLE;
+        discover_params.type = BT_GATT_DISCOVER_PRIMARY;
+
+        err = bt_gatt_discover(default_conn, &discover_params);
+        if (err) {
+            printk("Discover failed (err %d)\n", err);
+        }
+    }
+}
+
+static void disconnected(struct bt_conn *conn, uint8_t reason)
+{
+    char addr[BT_ADDR_LE_STR_LEN];
+
+    bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
+
+    printk("Disconnected: %s (reason 0x%02x)\n", addr, reason);
+
+    if (default_conn != conn) {
+        return;
+    }
+
+    bt_conn_unref(default_conn);
+    default_conn = NULL;
+
+    // Reset handles
+    nus_rx_handle = 0;
+    nus_tx_handle = 0;
+
+    start_scan();
+}
+
+// Define connection callbacks
+BT_CONN_CB_DEFINE(conn_callbacks) = {
+    .connected = connected,
+    .disconnected = disconnected,
+};
 
 static uint8_t discover_func(struct bt_conn *conn,
                          const struct bt_gatt_attr *attr,
@@ -169,67 +236,6 @@ static uint8_t discover_func(struct bt_conn *conn,
     return BT_GATT_ITER_STOP;
 }
 
-static void connected(struct bt_conn *conn, uint8_t conn_err)
-{
-    char addr[BT_ADDR_LE_STR_LEN];
-    int err;
-
-    bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
-
-    if (conn_err) {
-        printk("Failed to connect to %s (%u)\n", addr, conn_err);
-
-        bt_conn_unref(default_conn);
-        default_conn = NULL;
-
-        start_scan();
-        return;
-    }
-
-    printk("Connected: %s\n", addr);
-
-    if (conn == default_conn) {
-        discover_params.uuid = search_service_uuid;
-        discover_params.func = discover_func;
-        discover_params.start_handle = BT_ATT_FIRST_ATTRIBUTE_HANDLE;
-        discover_params.end_handle = BT_ATT_LAST_ATTRIBUTE_HANDLE;
-        discover_params.type = BT_GATT_DISCOVER_PRIMARY;
-
-        err = bt_gatt_discover(default_conn, &discover_params);
-        if (err) {
-            printk("Discover failed(err %d)\n", err);
-            return;
-        }
-    }
-}
-
-static void disconnected(struct bt_conn *conn, uint8_t reason)
-{
-    char addr[BT_ADDR_LE_STR_LEN];
-
-    bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
-
-    printk("Disconnected: %s (reason 0x%02x)\n", addr, reason);
-
-    if (default_conn != conn) {
-        return;
-    }
-
-    bt_conn_unref(default_conn);
-    default_conn = NULL;
-
-    // Reset handles
-    nus_rx_handle = 0;
-    nus_tx_handle = 0;
-
-    start_scan();
-}
-
-BT_CONN_CB_DEFINE(conn_callbacks) = {
-    .connected = connected,
-    .disconnected = disconnected,
-};
-
 // Check if the device name "RentScan" is in the advertising data
 static bool check_device_name(struct bt_data *data, void *user_data)
 {
@@ -312,22 +318,23 @@ static void bt_ready(int err)
     }
 
     printk("Bluetooth initialized\n");
-
     start_scan();
 }
 
-void main(void)
+int main(void)
 {
     int err;
 
     err = bt_enable(bt_ready);
     if (err) {
         printk("Bluetooth init failed (err %d)\n", err);
-        return;
+        return 0;
     }
     
     // Main application loop
     while (1) {
         k_sleep(K_SECONDS(1));
     }
+    
+    return 0;
 }
