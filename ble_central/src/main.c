@@ -92,7 +92,7 @@ static int send_to_peripheral(const char *data, uint16_t len)
     return bt_gatt_write(default_conn, &write_params);
 }
 
-// Modify the connection callback to use a simpler discovery method
+// Update the connected callback to be simpler and more direct
 static void connected(struct bt_conn *conn, uint8_t conn_err)
 {
     char addr[BT_ADDR_LE_STR_LEN];
@@ -112,51 +112,40 @@ static void connected(struct bt_conn *conn, uint8_t conn_err)
     printk("Connected: %s\n", addr);
 
     if (conn == default_conn) {
-        // Wait a moment after connection before starting discovery
-        k_sleep(K_MSEC(500));
+        // Wait longer after connection before starting discovery (important)
+        k_sleep(K_MSEC(1000));
         
-        // Use a more direct approach to find and enable notifications
-        uint16_t mtu = bt_gatt_get_mtu(conn);
-        printk("MTU: %u\n", mtu);
+        // Use the most direct approach - define handles based on common NUS implementation
+        printk("Using direct handle approach for NUS service\n");
         
-        // Start service discovery
-        discover_params.uuid = search_service_uuid;
-        discover_params.func = discover_func;
-        discover_params.start_handle = BT_ATT_FIRST_ATTRIBUTE_HANDLE;
-        discover_params.end_handle = BT_ATT_LAST_ATTRIBUTE_HANDLE;
-        discover_params.type = BT_GATT_DISCOVER_PRIMARY;
-
-        int err = bt_gatt_discover(default_conn, &discover_params);
-        if (err) {
-            printk("Discover failed (err %d)\n", err);
+        // Common NUS handle values
+        nus_rx_handle = 0x0011; // RX characteristic value handle
+        nus_tx_handle = 0x0013; // TX characteristic value handle
+        
+        // Set up subscription parameters
+        memset(&nus_tx_subscribe_params, 0, sizeof(nus_tx_subscribe_params));
+        nus_tx_subscribe_params.value_handle = nus_tx_handle;
+        nus_tx_subscribe_params.notify = nus_notify_callback;
+        nus_tx_subscribe_params.value = BT_GATT_CCC_NOTIFY;
+        nus_tx_subscribe_params.ccc_handle = 0x0014; // CCC descriptor handle
+        
+        printk("Subscribing directly to TX handle: 0x%04x, CCC: 0x%04x\n", 
+                nus_tx_handle, nus_tx_subscribe_params.ccc_handle);
+        
+        int err = bt_gatt_subscribe(conn, &nus_tx_subscribe_params);
+        if (err && err != -EALREADY) {
+            printk("Direct subscribe failed (err %d)\n", err);
+        } else {
+            printk("Direct subscription successful!\n");
             
-            // If discovery fails, try using the typical handle values directly
-            printk("Trying direct subscription with typical handles\n");
-            nus_rx_handle = 0x0011; // Common RX handle
-            nus_tx_handle = 0x0013; // Common TX handle
-            
-            // Try to subscribe with most likely CCC handle
-            memset(&nus_tx_subscribe_params, 0, sizeof(nus_tx_subscribe_params));
-            nus_tx_subscribe_params.value_handle = nus_tx_handle;
-            nus_tx_subscribe_params.notify = nus_notify_callback;
-            nus_tx_subscribe_params.value = BT_GATT_CCC_NOTIFY;
-            nus_tx_subscribe_params.ccc_handle = 0x0014; // Most common CCC handle
-            
-            err = bt_gatt_subscribe(conn, &nus_tx_subscribe_params);
-            if (err && err != -EALREADY) {
-                printk("Direct subscribe failed (err %d)\n", err);
+            // Send a test message after a delay
+            k_sleep(K_MSEC(1000));
+            const char *test_msg = "Hello from Central!";
+            err = send_to_peripheral(test_msg, strlen(test_msg));
+            if (err) {
+                printk("Failed to send message (err %d)\n", err);
             } else {
-                printk("Direct subscription successful!\n");
-                
-                // Send a test message after a delay
-                k_sleep(K_MSEC(500));
-                const char *test_msg = "Hello from Central!";
-                err = send_to_peripheral(test_msg, strlen(test_msg));
-                if (err) {
-                    printk("Failed to send message (err %d)\n", err);
-                } else {
-                    printk("Sent: %s\n", test_msg);
-                }
+                printk("Sent: %s\n", test_msg);
             }
         }
     }
