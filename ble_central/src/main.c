@@ -483,6 +483,7 @@ static void device_found(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
 {
     char dev[BT_ADDR_LE_STR_LEN];
     int err;
+    static int retry_count = 0;
     
     bt_addr_le_to_str(addr, dev, sizeof(dev));
     printk("[DEVICE]: %s, AD evt type %u, AD data len %u, RSSI %i\n",
@@ -501,15 +502,55 @@ static void device_found(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
                 printk("Stop LE scan failed (err %d)\n", err);
                 return;
             }
+            
+            // Check if we might have a stale connection
+            if (default_conn) {
+                printk("Cleaning up possible stale connection...\n");
+                bt_conn_disconnect(default_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+                bt_conn_unref(default_conn);
+                default_conn = NULL;
+                
+                // Reset all handles and parameters
+                nus_rx_handle = 0;
+                nus_tx_handle = 0;
+                nus_tx_ccc_handle = 0;
+                current_service_start_handle = 0;
+                nus_service_end_handle = 0;
+                memset(&discover_params, 0, sizeof(discover_params));
+                memset(&nus_tx_subscribe_params, 0, sizeof(nus_tx_subscribe_params));
+                
+                // Add a delay to allow the stack to clean up
+                k_sleep(K_MSEC(500));
+            }
 
             struct bt_le_conn_param *param = BT_LE_CONN_PARAM_DEFAULT;
             printk("Attempting to connect to %s\n", dev);
             err = bt_conn_le_create(addr, BT_CONN_LE_CREATE_CONN, param, &default_conn);
             if (err) {
                 printk("Create conn failed (err %d)\n", err);
+                
+                if (err == -EINVAL && retry_count < 3) {
+                    // Handle "Found valid connection in disconnected state" error
+                    retry_count++;
+                    printk("Connection state issue detected, resetting BT state (attempt %d/3)\n", retry_count);
+                    
+                    // When we get EINVAL on connection attempt, we need to reset the BT stack state
+                    // This will call bt_le_scan_stop() internally
+                    bt_le_scan_stop();
+                    
+                    // Wait a moment to ensure everything's stopped
+                    k_sleep(K_MSEC(1000));
+                    
+                    // Then start a fresh scan after a delay
+                    k_work_schedule(&start_scan_work, K_MSEC(2000));
+                    return;
+                }
+                
+                retry_count = 0;
                 start_scan();
             } else {
-                 printk("Connection creation initiated.\n");
+                printk("Connection creation initiated.\n");
+                retry_count = 0;
             }
         }
     }
@@ -520,8 +561,22 @@ static void start_scan(void)
     int err;
 
     if (default_conn) {
-        printk("Scan not started: connection already exists or is being attempted.\n");
-        return;
+        // Check if the connection is valid
+        struct bt_conn_info info;
+        err = bt_conn_get_info(default_conn, &info);
+        
+        if (err || info.state != BT_CONN_STATE_CONNECTED) {
+            printk("Connection in invalid state. Cleaning up...\n");
+            bt_conn_disconnect(default_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+            bt_conn_unref(default_conn);
+            default_conn = NULL;
+            
+            // Add a delay to allow cleanup
+            k_sleep(K_MSEC(500));
+        } else {
+            printk("Scan not started: connection already exists\n");
+            return;
+        }
     }
 
     printk("Starting LE scan for RentScan device...\n");
@@ -535,7 +590,11 @@ static void start_scan(void)
 
     err = bt_le_scan_start(&scan_param, device_found);
     if (err) {
-        printk("Scanning failed to start (err %d)\n", err);
+        if (err == -EALREADY) {
+            printk("Scan already started\n");
+        } else {
+            printk("Scanning failed to start (err %d)\n", err);
+        }
         return;
     }
 
@@ -546,18 +605,44 @@ static void bt_ready(int err)
 {
     if (err) {
         printk("Bluetooth init failed (err %d)\n", err);
+        // Attempt recovery after a delay
+        k_sleep(K_MSEC(1000));
+        err = bt_enable(bt_ready);
+        if (err) {
+            printk("Bluetooth re-init failed again (err %d)\n", err);
+        }
         return;
     }
 
     printk("Bluetooth initialized\n");
     
+    // Make sure any existing connections are cleaned up
+    if (default_conn) {
+        printk("Clearing existing connection on initialization\n");
+        bt_conn_disconnect(default_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+        bt_conn_unref(default_conn);
+        default_conn = NULL;
+    }
+    
     if (IS_ENABLED(CONFIG_SETTINGS)) {
         settings_load();
         printk("Settings loaded\n");
     }
+    
+    // Reset all connection state
+    nus_rx_handle = 0;
+    nus_tx_handle = 0;
+    nus_tx_ccc_handle = 0;
+    current_service_start_handle = 0;
+    nus_service_end_handle = 0;
+    memset(&discover_params, 0, sizeof(discover_params));
+    memset(&nus_tx_subscribe_params, 0, sizeof(nus_tx_subscribe_params));
 
+    // Initialize scan work handler
     k_work_init_delayable(&start_scan_work, start_scan_work_handler);
-    k_work_schedule(&start_scan_work, K_MSEC(500));
+    
+    // Start scanning after a delay to ensure the BT stack is fully initialized
+    k_work_schedule(&start_scan_work, K_MSEC(1000));
     printk("Scheduled scan start.\n");
 }
 
@@ -566,14 +651,33 @@ int main(void)
     int err;
     printk("==== RentScan Central ====\n");
     
+    // Initialize BLE stack
     err = bt_enable(bt_ready);
     if (err) {
         printk("Bluetooth init failed (err %d)\n", err);
-        return 0;
+        k_sleep(K_MSEC(1000));
+        
+        // Try once more
+        printk("Retrying Bluetooth initialization...\n");
+        err = bt_enable(bt_ready);
+        if (err) {
+            printk("Bluetooth re-init failed again (err %d)\n", err);
+            return 0;
+        }
     }
     
     while (1) {
         k_sleep(K_SECONDS(10));
+        
+        // Periodic check to recover from stuck states
+        if (!default_conn) {
+            // If we're not connected, try to restart scan
+            // This is safe to call even if already scanning
+            printk("Periodic check: ensuring scan is active\n");
+            start_scan();
+        } else {
+            printk("Periodic check: connected to device\n");
+        }
     }
     
     return 0;
