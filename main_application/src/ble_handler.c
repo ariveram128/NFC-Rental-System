@@ -14,7 +14,7 @@
 LOG_MODULE_REGISTER(ble_handler, LOG_LEVEL_INF);
 
 static struct bt_conn *current_conn = NULL;
-static bool notifications_enabled = false;
+static volatile bool notifications_enabled = false; // Ensure volatile for ISR context
 
 // Work item for periodic checks and status messages
 static struct k_work_delayable status_work;
@@ -22,6 +22,7 @@ static struct k_work_delayable status_work;
 // Forward declarations
 static void status_work_handler(struct k_work *work);
 static void print_service_info(void);
+static void nus_send_status_cb(enum bt_nus_send_status status); // Add forward declaration for the new callback
 
 static void connected(struct bt_conn *conn, uint8_t err)
 {
@@ -32,6 +33,9 @@ static void connected(struct bt_conn *conn, uint8_t err)
     current_conn = bt_conn_ref(conn);
     LOG_INF("Connected");
     
+    // Reset notification state on new connection
+    notifications_enabled = false; 
+
     // Start periodic status checks
     k_work_schedule(&status_work, K_MSEC(1000));
 }
@@ -48,6 +52,7 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
         current_conn = NULL;
     }
     notifications_enabled = false;
+    LOG_INF("Notifications flag reset."); // Added log
 }
 
 BT_CONN_CB_DEFINE(conn_callbacks) = {
@@ -60,58 +65,47 @@ static void nus_receive_cb(struct bt_conn *conn, const uint8_t *data, uint16_t l
     char msg[64];
     memcpy(msg, data, MIN(len, sizeof(msg) - 1));
     msg[MIN(len, sizeof(msg) - 1)] = '\0';
-    LOG_INF("Received over BLE: %s", msg);
+    LOG_INF("Received over BLE: %s (len %u)", msg, len);
     
     // If we received data from central, it's a good sign we're connected correctly
-    if (!notifications_enabled) {
-        LOG_INF("Received data from central, enabling notifications");
-        notifications_enabled = true;
-        
-        // Send a welcome message
-        char welcome_msg[50];
-        snprintf(welcome_msg, sizeof(welcome_msg), "RentScan ready for scanning at %u", k_uptime_get_32() / 1000);
-        ble_send(welcome_msg);
-    }
+    // The central might send data before enabling notifications.
+    // We should not assume notifications are enabled just by receiving data.
+    // The nus_send_status_cb callback is the definitive source for notification status.
 }
 
 // Callback for when NUS sends a notification successfully
 static void nus_sent_cb(struct bt_conn *conn)
 {
-    // We know notifications are enabled if we can send data successfully
-    if (!notifications_enabled) {
+    // This callback confirms that a notification was successfully sent to the peer.
+    // It doesn't necessarily mean the peer *processed* it, but the transport layer did its job.
+    LOG_INF("NUS data sent successfully to %p", (void *)conn); // Cast conn to void* for logging
+    // We don't set notifications_enabled = true here because the CCCD callback is the source of truth.
+}
+
+// New callback for NUS send status (reflects CCCD changes)
+static void nus_send_status_cb(enum bt_nus_send_status status)
+{
+    if (status == BT_NUS_SEND_STATUS_ENABLED) {
         LOG_INF("✅ NUS notifications enabled by central");
         notifications_enabled = true;
         
         // Send a welcome message to confirm the notification channel works
-        char welcome_msg[50];
-        snprintf(welcome_msg, sizeof(welcome_msg), "RentScan ready for scanning at %u", k_uptime_get_32() / 1000);
+        char welcome_msg[60];
+        snprintf(welcome_msg, sizeof(welcome_msg), "RentScan ready! Notifications ON. Uptime: %us", k_uptime_get_32() / 1000);
+        // It's generally safe to call ble_send from this callback as NUS service calls it from a work queue context.
         ble_send(welcome_msg);
-    }
-}
-
-// Callback for when NUS notify states change (Nordic BLE UART Service)
-// This is called when client enables or disables notifications
-static void on_cccd_changed(const struct bt_gatt_attr *attr, uint16_t value)
-{
-    LOG_INF("CCCD changed: value %u", value);
-    
-    if (value == BT_GATT_CCC_NOTIFY) {
-        LOG_INF("✅ NUS notifications enabled explicitly by central");
-        notifications_enabled = true;
-        
-        // Send a welcome message to confirm the notification channel works
-        char welcome_msg[50];
-        snprintf(welcome_msg, sizeof(welcome_msg), "RentScan ready at %u", k_uptime_get_32() / 1000);
-        ble_send(welcome_msg);
-    } else {
+    } else if (status == BT_NUS_SEND_STATUS_DISABLED) {
         LOG_INF("❌ NUS notifications disabled by central");
         notifications_enabled = false;
+    } else {
+        LOG_WRN("NUS send status unknown: %d", status);
     }
 }
 
 static struct bt_nus_cb nus_cb = {
     .received = nus_receive_cb,
     .sent = nus_sent_cb,
+    .send_enabled = nus_send_status_cb, // Correctly assign to send_enabled
 };
 
 // Periodic work handler to check status and try sending test messages
@@ -121,43 +115,30 @@ static void status_work_handler(struct k_work *work)
     counter++;
     
     if (current_conn && !notifications_enabled) {
-        LOG_WRN("Connected but notifications not enabled (attempt %u)", counter);
+        LOG_WRN("Connected but notifications not enabled by central (attempt %u)", counter);
         
-        // Every 2 attempts, try forcing notification status
-        if (counter % 2 == 0) {
-            LOG_INF("Attempting to force notification status");
-            
-            // Temporarily assume notifications are enabled to test sending
-            bool prev_state = notifications_enabled;
-            notifications_enabled = true;
-            
-            // Try sending a test message using direct BLE GATT notification
-            char test_msg[40];
-            snprintf(test_msg, sizeof(test_msg), "Test notification %u", counter);
-            
-            // First try with NUS
-            int err = bt_nus_send(current_conn, test_msg, strlen(test_msg));
-            
-            if (err) {
-                LOG_ERR("Failed to send test notification via NUS (err %d)", err);
-                notifications_enabled = prev_state;  // Reset the state
-                
-                // If we've been trying for a while, try to restart advertising
-                if (counter > 20) {
-                    LOG_WRN("Many notification attempts failed. Disconnecting and restarting.");
-                    if (current_conn) {
-                        bt_conn_disconnect(current_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
-                    }
-                }
-            } else {
-                LOG_INF("Test notification sent successfully");
-                notifications_enabled = true;  // Keep enabled since it worked
-                
-                // Send a welcome message
-                char welcome_msg[50];
-                snprintf(welcome_msg, sizeof(welcome_msg), "RentScan ready at %u", k_uptime_get_32() / 1000);
-                ble_send(welcome_msg);
-            }
+        // The peripheral should not try to force notifications.
+        // It should wait for the central to enable them by writing to the CCCD.
+        // The error -22 (EINVAL) on the peripheral side when trying to send a notification
+        // before the central has enabled them is expected behavior.
+
+        // If we've been connected for a while (e.g., > 15 seconds) and still no notifications,
+        // it might indicate an issue on the central side or a pairing problem.
+        // For now, we just log. A more robust solution might involve disconnecting
+        // to allow the central to re-initiate the connection and subscription process.
+        if (counter > 15 && (counter % 5 == 0)) { // Log every 5 attempts after 15 initial attempts
+            LOG_WRN("Still no notifications from central after %u checks. Central needs to subscribe.", counter);
+        }
+
+    } else if (current_conn && notifications_enabled) {
+        // Optionally, send a periodic heartbeat if notifications are enabled
+        // This can be useful for the central to know the peripheral is still alive.
+        // For example, every 30 seconds:
+        if (counter % 30 == 0) {
+            char heartbeat_msg[30];
+            snprintf(heartbeat_msg, sizeof(heartbeat_msg), "Peripheral Heartbeat %u", counter / 30);
+            // ble_send(heartbeat_msg); // Uncomment to enable heartbeat
+            LOG_INF("Sent heartbeat (if enabled in ble_send)");
         }
     }
     
@@ -219,8 +200,8 @@ int ble_send(const char *msg)
     }
     
     if (!notifications_enabled) {
-        LOG_WRN("BLE notifications not enabled by central");
-        return -EINVAL;
+        LOG_WRN("BLE notifications not enabled by central. Cannot send. Central must subscribe to TX char.");
+        return -EPERM; // EPERM (Operation not permitted) is more fitting than EINVAL here
     }
 
     int err = bt_nus_send(current_conn, msg, strlen(msg));
@@ -228,9 +209,10 @@ int ble_send(const char *msg)
         LOG_ERR("Failed to send over NUS (err %d)", err);
         
         // If we get an error while notifications are enabled, they might actually be disabled
-        if (err == -EINVAL) {
-            LOG_WRN("Got EINVAL, disabling notifications flag");
-            notifications_enabled = false;
+        // This case should ideally not happen if CCCD state is managed correctly.
+        if (err == -EINVAL || err == -EPIPE) { // EPIPE (Broken pipe) can also occur
+            LOG_WRN("NUS send failed (err %d) despite notifications_enabled=true. Resetting flag.", err);
+            notifications_enabled = false; // Re-evaluate notification state
         }
     } else {
         LOG_INF("Sent over BLE: %s", msg);
