@@ -123,27 +123,46 @@ static void status_work_handler(struct k_work *work)
     if (current_conn && !notifications_enabled) {
         LOG_WRN("Connected but notifications not enabled (attempt %u)", counter);
         
-        // Every 5 attempts, try forcing notification status
-        if (counter % 5 == 0) {
+        // Every 2 attempts, try forcing notification status
+        if (counter % 2 == 0) {
             LOG_INF("Attempting to force notification status");
+            
+            // Temporarily assume notifications are enabled to test sending
+            bool prev_state = notifications_enabled;
             notifications_enabled = true;
             
-            // Try sending a test message
+            // Try sending a test message using direct BLE GATT notification
             char test_msg[40];
             snprintf(test_msg, sizeof(test_msg), "Test notification %u", counter);
+            
+            // First try with NUS
             int err = bt_nus_send(current_conn, test_msg, strlen(test_msg));
             
             if (err) {
-                LOG_ERR("Failed to send test notification (err %d)", err);
-                notifications_enabled = false;
+                LOG_ERR("Failed to send test notification via NUS (err %d)", err);
+                notifications_enabled = prev_state;  // Reset the state
+                
+                // If we've been trying for a while, try to restart advertising
+                if (counter > 20) {
+                    LOG_WRN("Many notification attempts failed. Disconnecting and restarting.");
+                    if (current_conn) {
+                        bt_conn_disconnect(current_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+                    }
+                }
             } else {
                 LOG_INF("Test notification sent successfully");
+                notifications_enabled = true;  // Keep enabled since it worked
+                
+                // Send a welcome message
+                char welcome_msg[50];
+                snprintf(welcome_msg, sizeof(welcome_msg), "RentScan ready at %u", k_uptime_get_32() / 1000);
+                ble_send(welcome_msg);
             }
         }
     }
     
     // Reschedule the work
-    k_work_schedule(&status_work, K_MSEC(2000));
+    k_work_schedule(&status_work, K_MSEC(1000));  // Check every 1 second
 }
 
 int ble_handler_init(void)
