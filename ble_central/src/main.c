@@ -63,24 +63,20 @@ static uint8_t nus_notify_callback(struct bt_conn *conn,
         return BT_GATT_ITER_STOP;
     }
 
-    // Safely handle received data
+    // Safely handle received data using a static buffer instead of dynamic allocation
     if (length > 0) {
-        // Create a safe copy of the data with proper null termination
-        char *safe_data = k_malloc(length + 1);
-        if (safe_data) {
-            memcpy(safe_data, data, length);
-            safe_data[length] = '\0';
-            printk("Received from peripheral: %s\n", safe_data);
-            
-            // Process the data
-            if (strstr(safe_data, "RENTAL START") != NULL) {
-                printk("Rental data detected!\n");
-                // Process the rental data here
-            }
-            
-            k_free(safe_data);
-        } else {
-            printk("Failed to allocate memory for received data\n");
+        static char buffer[128]; // Static buffer large enough for expected messages
+        size_t copy_len = MIN(length, sizeof(buffer) - 1);
+        
+        memcpy(buffer, data, copy_len);
+        buffer[copy_len] = '\0'; // Null terminate
+        
+        printk("Received from peripheral: %s\n", buffer);
+        
+        // Process the data
+        if (strstr(buffer, "RENTAL START") != NULL) {
+            printk("Rental data detected!\n");
+            // Process the rental data here
         }
     }
 
@@ -176,6 +172,12 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 
     if (default_conn != conn) {
         return;
+    }
+
+    // Unsubscribe from notifications if we were subscribed
+    if (nus_tx_subscribe_params.value_handle) {
+        bt_gatt_unsubscribe(conn, &nus_tx_subscribe_params);
+        printk("Unsubscribed from NUS notifications\n");
     }
 
     bt_conn_unref(default_conn);

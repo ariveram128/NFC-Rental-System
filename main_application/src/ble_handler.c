@@ -92,8 +92,16 @@ static void nus_send_status_cb(enum bt_nus_send_status status)
         // Send a welcome message to confirm the notification channel works
         char welcome_msg[60];
         snprintf(welcome_msg, sizeof(welcome_msg), "RentScan ready! Notifications ON. Uptime: %us", k_uptime_get_32() / 1000);
+        // Log before sending to help diagnosis
+        LOG_INF("Sending welcome notification: '%s'", welcome_msg);
+        
         // It's generally safe to call ble_send from this callback as NUS service calls it from a work queue context.
-        ble_send(welcome_msg);
+        int err = ble_send(welcome_msg);
+        if (err) {
+            LOG_ERR("Failed to send welcome message (err %d)", err);
+        } else {
+            LOG_INF("Welcome notification sent successfully");
+        }
     } else if (status == BT_NUS_SEND_STATUS_DISABLED) {
         LOG_INF("❌ NUS notifications disabled by central");
         notifications_enabled = false;
