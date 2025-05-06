@@ -27,7 +27,12 @@
 #define BT_UUID_NUS_RX      BT_UUID_DECLARE_128(BT_UUID_NUS_RX_VAL)
 #define BT_UUID_NUS_TX      BT_UUID_DECLARE_128(BT_UUID_NUS_TX_VAL)
 
+// Forward declarations
 static void start_scan(void);
+static void bt_ready(int err);
+static uint8_t discover_func(struct bt_conn *conn,
+                         const struct bt_gatt_attr *attr,
+                         struct bt_gatt_discover_params *params);
 
 static struct bt_conn *default_conn;
 static struct bt_gatt_discover_params discover_params;
@@ -49,11 +54,6 @@ static void start_scan_work_handler(struct k_work *work)
 {
     start_scan();
 }
-
-// Forward declarations
-static uint8_t discover_func(struct bt_conn *conn,
-                         const struct bt_gatt_attr *attr,
-                         struct bt_gatt_discover_params *params);
 
 // Callback for receiving notifications from the NUS TX characteristic
 static uint8_t nus_notify_callback(struct bt_conn *conn,
@@ -478,12 +478,61 @@ static bool check_device_name(struct bt_data *data, void *user_data)
     return true;
 }
 
+// Complete Bluetooth reset function
+static void complete_bt_reset(void)
+{
+    printk("Performing complete Bluetooth stack reset...\n");
+    
+    // First stop any scanning
+    bt_le_scan_stop();
+    
+    // Disconnect and clean up any connections
+    if (default_conn) {
+        bt_conn_disconnect(default_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+        bt_conn_unref(default_conn);
+        default_conn = NULL;
+    }
+    
+    // Reset all handles and state variables
+    nus_rx_handle = 0;
+    nus_tx_handle = 0;
+    nus_tx_ccc_handle = 0;
+    current_service_start_handle = 0;
+    nus_service_end_handle = 0;
+    memset(&discover_params, 0, sizeof(discover_params));
+    memset(&nus_tx_subscribe_params, 0, sizeof(nus_tx_subscribe_params));
+    
+    // Allow time for cleanup before disabling
+    k_sleep(K_MSEC(1000));
+    
+    // Disable Bluetooth completely
+    int err = bt_disable();
+    if (err) {
+        printk("Failed to disable Bluetooth (err %d)\n", err);
+    } else {
+        printk("Bluetooth disabled successfully\n");
+    }
+    
+    // Wait for controller to fully shut down
+    k_sleep(K_MSEC(2000));
+    
+    // Re-enable Bluetooth with our bt_ready callback
+    printk("Re-enabling Bluetooth...\n");
+    err = bt_enable(bt_ready);
+    if (err) {
+        printk("Failed to re-enable Bluetooth (err %d)\n", err);
+    }
+}
+
 static void device_found(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
                      struct net_buf_simple *ad)
 {
     char dev[BT_ADDR_LE_STR_LEN];
     int err;
     static int retry_count = 0;
+    static int total_retry_count = 0;
+    static uint64_t last_reset_time = 0;
+    uint64_t current_time = k_uptime_get();
     
     bt_addr_le_to_str(addr, dev, sizeof(dev));
     printk("[DEVICE]: %s, AD evt type %u, AD data len %u, RSSI %i\n",
@@ -529,13 +578,27 @@ static void device_found(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
             if (err) {
                 printk("Create conn failed (err %d)\n", err);
                 
-                if (err == -EINVAL && retry_count < 3) {
-                    // Handle "Found valid connection in disconnected state" error
+                // Check if we have the "Found valid connection in disconnected state" error
+                if (err == -EINVAL) {
                     retry_count++;
+                    total_retry_count++;
+                    
+                    // If we've exceeded retries or the error persists after a complete reset
+                    if (retry_count >= 3 || (current_time - last_reset_time < 30000 && total_retry_count > 6)) {
+                        printk("Connection state issues persist after retries. Attempting complete BT reset...\n");
+                        
+                        // Record when we did the complete reset
+                        last_reset_time = current_time;
+                        retry_count = 0;
+                        
+                        // Perform a complete BT stack reset
+                        complete_bt_reset();
+                        return;
+                    }
+                    
                     printk("Connection state issue detected, resetting BT state (attempt %d/3)\n", retry_count);
                     
                     // When we get EINVAL on connection attempt, we need to reset the BT stack state
-                    // This will call bt_le_scan_stop() internally
                     bt_le_scan_stop();
                     
                     // Wait a moment to ensure everything's stopped
