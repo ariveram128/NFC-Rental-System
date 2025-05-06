@@ -163,16 +163,16 @@ int ble_handler_init(void)
     // Log information about registered services
     print_service_info();
 
-    // Define advertising data - using static const variables for flag values
-    static const uint8_t flags = BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR;
-    static const char dev_name[] = "RentScan";
+    // Use constant data for advertising flags and name
+    static const uint8_t ad_flags = BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR;
+    static const char ad_name[] = "RentScan";
     
     static const struct bt_data ad[] = {
-        { BT_DATA_FLAGS, 1, &flags },
-        { BT_DATA_NAME_COMPLETE, sizeof(dev_name)-1, dev_name },
+        { BT_DATA_FLAGS, 1, &ad_flags },
+        { BT_DATA_NAME_COMPLETE, 8, ad_name }, // "RentScan" is exactly 8 characters
     };
 
-    // Use the simplest advertising parameters
+    // Use BT_LE_ADV_CONN for simplicity
     err = bt_le_adv_start(BT_LE_ADV_CONN, ad, ARRAY_SIZE(ad), NULL, 0);
     if (err) {
         LOG_ERR("Advertising failed to start (err %d)", err);
