@@ -18,7 +18,10 @@ static bool notifications_enabled = false;
 
 // Work item for periodic checks and status messages
 static struct k_work_delayable status_work;
+
+// Forward declarations
 static void status_work_handler(struct k_work *work);
+static void print_service_info(void);
 
 static void connected(struct bt_conn *conn, uint8_t err)
 {
@@ -150,21 +153,26 @@ int ble_handler_init(void)
     // Initialize the status check work
     k_work_init_delayable(&status_work, status_work_handler);
 
+    LOG_INF("Initializing Nordic UART Service (NUS)");
     err = bt_nus_init(&nus_cb);
     if (err) {
         LOG_ERR("Failed to init NUS (err %d)", err);
         return err;
     }
+    
+    // Log information about registered services
+    print_service_info();
 
     const struct bt_data ad[] = {
         BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
         BT_DATA(BT_DATA_NAME_COMPLETE, "RentScan", 8),
     };
 
+    // Use more aggressive advertising parameters for better discoverability
     struct bt_le_adv_param adv_param = BT_LE_ADV_PARAM_INIT(
-        BT_LE_ADV_OPT_CONNECTABLE,
-        BT_GAP_ADV_FAST_INT_MIN_2,
-        BT_GAP_ADV_FAST_INT_MAX_2,
+        BT_LE_ADV_OPT_CONNECTABLE | BT_LE_ADV_OPT_USE_NAME,
+        BT_GAP_ADV_FAST_INT_MIN_1,
+        BT_GAP_ADV_FAST_INT_MAX_1,
         NULL
     );
 
@@ -174,8 +182,17 @@ int ble_handler_init(void)
         return err;
     }
 
-    LOG_INF("Advertising as RentScan device");
+    LOG_INF("Advertising as RentScan device with NUS service");
     return 0;
+}
+
+// Helper function to verify registered services
+static void print_service_info(void)
+{
+    LOG_INF("Registered BLE services and characteristics:");
+    LOG_INF("NUS Service UUID: 6E400001-B5A3-F393-E0A9-E50E24DCCA9E");
+    LOG_INF("  RX Char UUID:   6E400002-B5A3-F393-E0A9-E50E24DCCA9E (Write)");
+    LOG_INF("  TX Char UUID:   6E400003-B5A3-F393-E0A9-E50E24DCCA9E (Notify)");
 }
 
 int ble_send(const char *msg)

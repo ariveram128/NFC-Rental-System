@@ -161,109 +161,212 @@ static uint8_t discover_func(struct bt_conn *conn,
     int err;
 
     if (!attr) {
-        printk("Discover complete\n");
-        (void)memset(params, 0, sizeof(*params));
+        printk("Discover complete for type %u\n", params->type);
+
+        // If we were discovering the primary service
+        if (params->type == BT_GATT_DISCOVER_PRIMARY) {
+            if (!params->uuid) {
+                printk("No service UUID found\n");
+                return BT_GATT_ITER_STOP;
+            }
+            
+            // Move on to discover characteristics
+            discover_params.uuid = BT_UUID_NUS_RX;
+            discover_params.start_handle = attr->handle + 1;  // Use the next handle after service
+            discover_params.end_handle = 0xffff;  // Search to the end of the range
+            discover_params.type = BT_GATT_DISCOVER_CHARACTERISTIC;
+            
+            printk("Starting characteristic discovery for RX\n");
+            err = bt_gatt_discover(conn, &discover_params);
+            if (err) {
+                printk("Characteristic discover failed (err %d)\n", err);
+            }
+            return BT_GATT_ITER_STOP;
+        }
         
-        // If we've found the TX handle, subscribe to notifications
-        if (nus_tx_handle) {
-            printk("Preparing to subscribe to TX handle 0x%04x\n", nus_tx_handle);
+        // If we were discovering the RX characteristic
+        if (params->uuid && bt_uuid_cmp(params->uuid, BT_UUID_NUS_RX) == 0) {
+            if (!nus_rx_handle) {
+                printk("Did not find RX characteristic\n");
+            }
             
-            memset(&nus_tx_subscribe_params, 0, sizeof(nus_tx_subscribe_params));
-            nus_tx_subscribe_params.value_handle = nus_tx_handle;
-            nus_tx_subscribe_params.notify = nus_notify_callback;
-            nus_tx_subscribe_params.value = BT_GATT_CCC_NOTIFY;
+            // Now look for the TX characteristic
+            discover_params.uuid = BT_UUID_NUS_TX;
+            discover_params.start_handle = BT_ATT_FIRST_ATTRIBUTE_HANDLE;
+            discover_params.end_handle = 0xffff;
             
-            // Try to find CCC descriptor
-            nus_tx_subscribe_params.ccc_handle = 0; // Let BT stack discover it
+            printk("Starting characteristic discovery for TX\n");
+            err = bt_gatt_discover(conn, &discover_params);
+            if (err) {
+                printk("TX discover failed (err %d)\n", err);
+            }
+            return BT_GATT_ITER_STOP;
+        }
+        
+        // If we were discovering the TX characteristic
+        if (params->uuid && bt_uuid_cmp(params->uuid, BT_UUID_NUS_TX) == 0) {
+            if (!nus_tx_handle) {
+                printk("Did not find TX characteristic\n");
+                return BT_GATT_ITER_STOP;
+            }
             
-            // Wait a moment before subscribing (helps with some devices)
-            k_sleep(K_MSEC(100));
+            // Now discover CCC descriptor
+            discover_params.uuid = BT_UUID_GATT_CCC;
+            discover_params.start_handle = nus_tx_handle + 1;
+            discover_params.end_handle = 0xffff;
+            discover_params.type = BT_GATT_DISCOVER_DESCRIPTOR;
             
-            err = bt_gatt_subscribe(conn, &nus_tx_subscribe_params);
-            if (err && err != -EALREADY) {
-                printk("Subscribe failed (err %d)\n", err);
+            printk("Starting CCC descriptor discovery\n");
+            err = bt_gatt_discover(conn, &discover_params);
+            if (err) {
+                printk("CCC discover failed (err %d)\n", err);
                 
-                // Try manual CCC handle if auto-discovery fails
-                nus_tx_subscribe_params.ccc_handle = nus_tx_handle + 1;
-                printk("Trying with manual CCC handle: 0x%04x\n", nus_tx_subscribe_params.ccc_handle);
+                // If CCC discovery fails, try to subscribe anyway with best guess
+                if (nus_tx_handle) {
+                    memset(&nus_tx_subscribe_params, 0, sizeof(nus_tx_subscribe_params));
+                    nus_tx_subscribe_params.value_handle = nus_tx_handle;
+                    nus_tx_subscribe_params.notify = nus_notify_callback;
+                    nus_tx_subscribe_params.value = BT_GATT_CCC_NOTIFY;
+                    nus_tx_subscribe_params.ccc_handle = nus_tx_handle + 1; // Best guess
+                    
+                    printk("Trying to subscribe with best guess CCC handle: 0x%04x\n", 
+                           nus_tx_subscribe_params.ccc_handle);
+                    
+                    err = bt_gatt_subscribe(conn, &nus_tx_subscribe_params);
+                    if (err) {
+                        printk("Subscribe failed (err %d)\n", err);
+                        
+                        // Try with CCC handle + 1 as a fallback
+                        nus_tx_subscribe_params.ccc_handle = nus_tx_handle + 2;
+                        printk("Trying fallback CCC handle: 0x%04x\n", 
+                               nus_tx_subscribe_params.ccc_handle);
+                        
+                        err = bt_gatt_subscribe(conn, &nus_tx_subscribe_params);
+                        if (err) {
+                            printk("Fallback subscribe also failed (err %d)\n", err);
+                        } else {
+                            printk("Fallback subscription successful!\n");
+                        }
+                    } else {
+                        printk("Best guess subscription successful!\n");
+                    }
+                }
+            }
+            return BT_GATT_ITER_STOP;
+        }
+        
+        // If we were discovering CCC descriptor
+        if (params->type == BT_GATT_DISCOVER_DESCRIPTOR) {
+            uint16_t ccc_handle = 0;
+            
+            // We should have found the CCC handle by now
+            if (!ccc_handle && nus_tx_handle) {
+                memset(&nus_tx_subscribe_params, 0, sizeof(nus_tx_subscribe_params));
+                nus_tx_subscribe_params.value_handle = nus_tx_handle;
+                nus_tx_subscribe_params.notify = nus_notify_callback;
+                nus_tx_subscribe_params.value = BT_GATT_CCC_NOTIFY;
+                
+                // Use the discovered CCC handle if available, otherwise best guess
+                if (ccc_handle) {
+                    nus_tx_subscribe_params.ccc_handle = ccc_handle;
+                } else {
+                    nus_tx_subscribe_params.ccc_handle = nus_tx_handle + 1;
+                }
+                
+                printk("Subscribing with CCC handle: 0x%04x\n", 
+                       nus_tx_subscribe_params.ccc_handle);
                 
                 err = bt_gatt_subscribe(conn, &nus_tx_subscribe_params);
-                if (err && err != -EALREADY) {
-                    printk("Manual subscribe also failed (err %d)\n", err);
+                if (err) {
+                    printk("Subscribe failed (err %d)\n", err);
                 } else {
-                    printk("Manual subscription successful!\n");
+                    printk("Subscription successful!\n");
+                    
+                    // Send a test message
+                    k_sleep(K_MSEC(500));
+                    const char *test_msg = "Hello from Central!";
+                    err = send_to_peripheral(test_msg, strlen(test_msg));
+                    if (err) {
+                        printk("Failed to send message (err %d)\n", err);
+                    } else {
+                        printk("Sent: %s\n", test_msg);
+                    }
                 }
-            } else {
-                printk("Subscribed to NUS TX characteristic\n");
             }
-            
-            // Wait a moment after subscribing before sending
-            k_sleep(K_MSEC(500));
-            
-            // Send a test message
-            const char *test_msg = "Hello from Central!";
-            err = send_to_peripheral(test_msg, strlen(test_msg));
-            if (err) {
-                printk("Failed to send message (err %d)\n", err);
-            } else {
-                printk("Sent: %s\n", test_msg);
-            }
-        } else {
-            printk("TX handle not found during discovery\n");
+            return BT_GATT_ITER_STOP;
         }
         
         return BT_GATT_ITER_STOP;
     }
 
-    // Found NUS service
-    if (bt_uuid_cmp(discover_params.uuid, BT_UUID_NUS_SERVICE) == 0) {
-        printk("Found NUS service at handle 0x%04x\n", attr->handle);
+    // Found a primary service
+    if (params->type == BT_GATT_DISCOVER_PRIMARY) {
+        struct bt_gatt_service_val *service_val = attr->user_data;
         
-        // Now look for the RX characteristic
-        discover_params.uuid = BT_UUID_NUS_RX;
-        discover_params.start_handle = attr->handle + 1;
-        discover_params.type = BT_GATT_DISCOVER_CHARACTERISTIC;
-
-        err = bt_gatt_discover(conn, &discover_params);
-        if (err) {
-            printk("Discover failed (err %d)\n", err);
+        if (bt_uuid_cmp(service_val->uuid, BT_UUID_NUS_SERVICE) == 0) {
+            printk("Found NUS service at handle 0x%04x, end handle 0x%04x\n", 
+                   attr->handle, service_val->end_handle);
+            
+            // Save the end handle for later use in characteristic discovery
+            discover_params.start_handle = attr->handle + 1;
+            discover_params.end_handle = service_val->end_handle;
+            
+            // No need to call bt_gatt_discover again, the function will continue
+        }
+    } 
+    // Found a characteristic
+    else if (params->type == BT_GATT_DISCOVER_CHARACTERISTIC) {
+        struct bt_gatt_chrc *chrc = attr->user_data;
+        
+        if (bt_uuid_cmp(chrc->uuid, BT_UUID_NUS_RX) == 0) {
+            printk("Found NUS RX characteristic at handle 0x%04x\n", attr->handle);
+            nus_rx_handle = attr->handle + 1; // Value handle is the next one
+            printk("RX value handle: 0x%04x\n", nus_rx_handle);
+        }
+        else if (bt_uuid_cmp(chrc->uuid, BT_UUID_NUS_TX) == 0) {
+            printk("Found NUS TX characteristic at handle 0x%04x\n", attr->handle);
+            nus_tx_handle = attr->handle + 1; // Value handle is the next one
+            printk("TX value handle: 0x%04x\n", nus_tx_handle);
         }
     }
-    // Found NUS RX characteristic
-    else if (bt_uuid_cmp(discover_params.uuid, BT_UUID_NUS_RX) == 0) {
-        printk("Found NUS RX characteristic at handle 0x%04x\n", attr->handle);
-        nus_rx_handle = bt_gatt_attr_value_handle(attr);
-        printk("RX value handle: 0x%04x\n", nus_rx_handle);
-        
-        // Now look for the TX characteristic
-        discover_params.uuid = BT_UUID_NUS_TX;
-        discover_params.start_handle = attr->handle + 1;
-
-        err = bt_gatt_discover(conn, &discover_params);
-        if (err) {
-            printk("Discover failed (err %d)\n", err);
+    // Found a descriptor
+    else if (params->type == BT_GATT_DISCOVER_DESCRIPTOR) {
+        printk("Found descriptor at handle 0x%04x, UUID: %x\n", attr->handle, 
+               ((struct bt_uuid_16 *)attr->uuid)->val);
+               
+        // Check if this is the CCC descriptor
+        if (bt_uuid_cmp(attr->uuid, BT_UUID_GATT_CCC) == 0) {
+            printk("Found CCC descriptor at handle 0x%04x\n", attr->handle);
+            
+            // Use this handle for subscribe params
+            memset(&nus_tx_subscribe_params, 0, sizeof(nus_tx_subscribe_params));
+            nus_tx_subscribe_params.value_handle = nus_tx_handle;
+            nus_tx_subscribe_params.notify = nus_notify_callback;
+            nus_tx_subscribe_params.value = BT_GATT_CCC_NOTIFY;
+            nus_tx_subscribe_params.ccc_handle = attr->handle;
+            
+            printk("Subscribing with discovered CCC handle: 0x%04x\n", attr->handle);
+            
+            err = bt_gatt_subscribe(conn, &nus_tx_subscribe_params);
+            if (err) {
+                printk("Subscribe failed (err %d)\n", err);
+            } else {
+                printk("Subscription successful!\n");
+                
+                // Send a test message
+                k_sleep(K_MSEC(500));
+                const char *test_msg = "Hello from Central!";
+                err = send_to_peripheral(test_msg, strlen(test_msg));
+                if (err) {
+                    printk("Failed to send message (err %d)\n", err);
+                } else {
+                    printk("Sent: %s\n", test_msg);
+                }
+            }
         }
     }
-    // Found NUS TX characteristic
-    else if (bt_uuid_cmp(discover_params.uuid, BT_UUID_NUS_TX) == 0) {
-        printk("Found NUS TX characteristic at handle 0x%04x\n", attr->handle);
-        nus_tx_handle = bt_gatt_attr_value_handle(attr);
-        printk("TX value handle: 0x%04x\n", nus_tx_handle);
-        
-        // Now discover descriptors (including CCC)
-        discover_params.uuid = NULL;
-        discover_params.start_handle = attr->handle + 1;
-        discover_params.type = BT_GATT_DISCOVER_DESCRIPTOR;
-        
-        err = bt_gatt_discover(conn, &discover_params);
-        if (err) {
-            printk("Discover descriptors failed (err %d)\n", err);
-        }
-    } else {
-        printk("Found descriptor at handle 0x%04x\n", attr->handle);
-    }
 
-    return BT_GATT_ITER_STOP;
+    return BT_GATT_ITER_CONTINUE;
 }
 
 // Check if the device name "RentScan" is in the advertising data
