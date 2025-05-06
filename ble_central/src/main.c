@@ -178,35 +178,21 @@ static void connected(struct bt_conn *conn, uint8_t conn_err)
     nus_service_end_handle = 0;
     
     // Allow time to stabilize before service discovery
-    k_sleep(K_MSEC(300));
-
-    // Start GATT exchange (optional but recommended for better performance)
-    // Disable MTU exchange for now as it may be causing issues
-    /*
-    struct bt_gatt_exchange_params exchange_params = {
-        .func = NULL  // We don't need a callback for this
-    };
-    err = bt_gatt_exchange_mtu(conn, &exchange_params);
-    if (err) {
-        printk("MTU exchange failed (err %d)\n", err);
-    }
-    
-    // Allow some time for MTU exchange to complete
-    k_sleep(K_MSEC(100));
-    */
+    k_sleep(K_MSEC(500));
 
     printk("Starting service discovery...\n");
     
     // Initialize discovery parameters
     memset(&discover_params, 0, sizeof(discover_params));
-    discover_params.uuid = BT_UUID_NUS_SERVICE;
     discover_params.func = discover_func;
     discover_params.start_handle = BT_ATT_FIRST_ATTRIBUTE_HANDLE;
     discover_params.end_handle = BT_ATT_LAST_ATTRIBUTE_HANDLE;
     discover_params.type = BT_GATT_DISCOVER_PRIMARY;
     
-    printk("Discovery params: UUID ptr %p, func %p\n", 
-           discover_params.uuid, discover_params.func);
+    // Start with a general service discovery (no UUID filter)
+    // This avoids issues with UUID comparison
+    printk("Discovery params: func %p, searching for all services\n", 
+           discover_params.func);
 
     // Start service discovery
     err = bt_gatt_discover(conn, &discover_params);
@@ -287,20 +273,33 @@ static uint8_t discover_func(struct bt_conn *conn,
         printk("Discovery complete but target not found, type %u\n", params->type);
         
         // If we were looking for the NUS service and didn't find it, trigger recovery
-        if (params->type == BT_GATT_DISCOVER_PRIMARY && 
-            bt_uuid_cmp(params->uuid, BT_UUID_NUS_SERVICE) == 0) {
-            printk("ERROR: NUS service not found\n");
+        if (params->type == BT_GATT_DISCOVER_PRIMARY) {
+            printk("ERROR: NUS service not found, attempting different approach\n");
+            
+            // Try to find the Nordic UART Service by handle range using read by group type
+            memset(params, 0, sizeof(*params));
+            params->uuid = NULL;  // Don't filter by UUID for initial discovery
+            params->start_handle = BT_ATT_FIRST_ATTRIBUTE_HANDLE;
+            params->end_handle = BT_ATT_LAST_ATTRIBUTE_HANDLE;
+            params->type = BT_GATT_DISCOVER_PRIMARY;
+            params->func = discover_func;
+            
+            printk("Starting general service discovery...\n");
+            err = bt_gatt_discover(conn, params);
+            if (err) {
+                printk("General service discovery failed (err %d)\n", err);
+                error_recovery();
+            }
+        } else {
             error_recovery();
         }
         
-        // Clear the discovery parameters
-        memset(params, 0, sizeof(*params));
         return BT_GATT_ITER_STOP;
     }
 
     printk("Discovery: attr handle 0x%04x, type %u\n", attr->handle, params->type);
 
-    // Stage 1: Discovered Primary NUS Service
+    // Stage 1: Discovered Primary Service
     if (params->type == BT_GATT_DISCOVER_PRIMARY) {
         if (!attr->user_data) {
             printk("ERROR: NULL user_data for service\n");
@@ -308,20 +307,72 @@ static uint8_t discover_func(struct bt_conn *conn,
             return BT_GATT_ITER_STOP;
         }
         
-        // Verify this is actually the NUS service
+        // Get service value
         struct bt_gatt_service_val *service_val = attr->user_data;
-        if (bt_uuid_cmp(service_val->uuid, BT_UUID_NUS_SERVICE) != 0) {
-            printk("ERROR: Found service is not NUS service\n");
-            return BT_GATT_ITER_CONTINUE; // Continue searching for NUS
+        if (!service_val || !service_val->uuid) {
+            printk("ERROR: Invalid service data\n");
+            error_recovery();
+            return BT_GATT_ITER_STOP;
         }
         
+        // Debug print the UUID
+        printk("Found service with UUID type %u\n", service_val->uuid->type);
+        
+        // Check if this is the NUS service
+        // First approach: try direct UUID comparison if we have a specific target
+        if (params->uuid) {
+            if (bt_uuid_cmp(service_val->uuid, params->uuid) != 0) {
+                printk("Not the target service, continuing search...\n");
+                return BT_GATT_ITER_CONTINUE;
+            }
+        } 
+        // Second approach: check for NUS UUID manually
+        else {
+            // For 128-bit UUIDs (which NUS uses)
+            if (service_val->uuid->type == BT_UUID_TYPE_128) {
+                struct bt_uuid_128 *uuid_128 = (struct bt_uuid_128 *)service_val->uuid;
+                // Print UUID for debugging
+                printk("Service UUID: ");
+                for (int i = 0; i < 16; i++) {
+                    printk("%02x", uuid_128->val[i]);
+                    if (i == 3 || i == 5 || i == 7 || i == 9) printk("-");
+                }
+                printk("\n");
+                
+                // The NUS UUID is 6E400001-B5A3-F393-E0A9-E50E24DCCA9E
+                // Manually check if this is the NUS service
+                static const uint8_t nus_uuid_val[] = {
+                    0x9E, 0xCA, 0xDC, 0x24, 0x0E, 0xE5, 0xA9, 0xE0, 
+                    0x93, 0xF3, 0xA3, 0xB5, 0x01, 0x00, 0x40, 0x6E
+                };
+                
+                bool is_nus = true;
+                for (int i = 0; i < 16; i++) {
+                    if (uuid_128->val[i] != nus_uuid_val[i]) {
+                        is_nus = false;
+                        break;
+                    }
+                }
+                
+                if (!is_nus) {
+                    printk("Not the NUS service, continuing search...\n");
+                    return BT_GATT_ITER_CONTINUE;
+                }
+            } else {
+                // Not a 128-bit UUID, can't be NUS
+                return BT_GATT_ITER_CONTINUE;
+            }
+        }
+        
+        // At this point, we've found the NUS service either through direct comparison
+        // or manual UUID checking
         printk("Found NUS Service: attr_handle 0x%04x, end_handle 0x%04x\n",
                attr->handle, service_val->end_handle);
         
         current_service_start_handle = attr->handle;
         nus_service_end_handle = service_val->end_handle;
 
-        // Discover NUS RX Characteristic within this service
+        // Now discover NUS RX Characteristic 
         memset(params, 0, sizeof(*params));
         params->uuid = BT_UUID_NUS_RX;
         params->start_handle = attr->handle + 1; 
@@ -337,7 +388,7 @@ static uint8_t discover_func(struct bt_conn *conn,
         }
         return BT_GATT_ITER_STOP;
     }
-    // Stage 2: Discovered NUS RX Characteristic
+    // Stage 2: Discovered Characteristic
     else if (params->type == BT_GATT_DISCOVER_CHARACTERISTIC) {
         if (!attr->user_data) {
             printk("ERROR: NULL user_data for characteristic\n");
@@ -352,49 +403,131 @@ static uint8_t discover_func(struct bt_conn *conn,
             return BT_GATT_ITER_STOP;
         }
         
-        // Check if this is the RX or TX characteristic
-        if (params->uuid == BT_UUID_NUS_RX || 
-            (params->uuid && bt_uuid_cmp(params->uuid, BT_UUID_NUS_RX) == 0)) {
-            
-            nus_rx_handle = chrc->value_handle;
-            printk("Found RX characteristic: value_handle 0x%04x\n", nus_rx_handle);
+        // Print the UUID type for debugging
+        printk("Found characteristic with UUID type %u\n", chrc->uuid->type);
+        
+        // Check if we're looking for a specific UUID
+        if (params->uuid) {
+            // Check if this is the RX or TX characteristic
+            if (bt_uuid_cmp(chrc->uuid, BT_UUID_NUS_RX) == 0) {
+                nus_rx_handle = chrc->value_handle;
+                printk("Found RX characteristic: value_handle 0x%04x\n", nus_rx_handle);
 
-            // Now look for the TX characteristic
-            memset(params, 0, sizeof(*params));
-            params->uuid = BT_UUID_NUS_TX;
-            params->start_handle = attr->handle + 1;
-            params->end_handle = nus_service_end_handle;
-            params->type = BT_GATT_DISCOVER_CHARACTERISTIC;
-            params->func = discover_func;
+                // Now look for the TX characteristic
+                memset(params, 0, sizeof(*params));
+                params->uuid = BT_UUID_NUS_TX;
+                params->start_handle = attr->handle + 1;
+                params->end_handle = nus_service_end_handle;
+                params->type = BT_GATT_DISCOVER_CHARACTERISTIC;
+                params->func = discover_func;
 
-            err = bt_gatt_discover(conn, params);
-            if (err) {
-                printk("TX characteristic discovery failed (err %d)\n", err);
-                error_recovery();
+                err = bt_gatt_discover(conn, params);
+                if (err) {
+                    printk("TX characteristic discovery failed (err %d)\n", err);
+                    error_recovery();
+                }
+            } else if (bt_uuid_cmp(chrc->uuid, BT_UUID_NUS_TX) == 0) {
+                nus_tx_handle = chrc->value_handle;
+                printk("Found TX characteristic: value_handle 0x%04x\n", nus_tx_handle);
+
+                // Find the CCC descriptor for enabling notifications
+                memset(params, 0, sizeof(*params));
+                params->uuid = BT_UUID_GATT_CCC;
+                params->start_handle = nus_tx_handle + 1;
+                params->end_handle = nus_service_end_handle;
+                params->type = BT_GATT_DISCOVER_DESCRIPTOR;
+                params->func = discover_func;
+
+                err = bt_gatt_discover(conn, params);
+                if (err) {
+                    printk("CCC descriptor discovery failed (err %d)\n", err);
+                    error_recovery();
+                }
+            } else {
+                printk("Unknown characteristic found, continuing search\n");
+                return BT_GATT_ITER_CONTINUE;
             }
-        } else if (params->uuid == BT_UUID_NUS_TX || 
-                  (params->uuid && bt_uuid_cmp(params->uuid, BT_UUID_NUS_TX) == 0)) {
-            
-            nus_tx_handle = chrc->value_handle;
-            printk("Found TX characteristic: value_handle 0x%04x\n", nus_tx_handle);
+        }
+        // We're doing a general scan for characteristics
+        else {
+            // Print the UUID for debugging
+            if (chrc->uuid->type == BT_UUID_TYPE_128) {
+                struct bt_uuid_128 *uuid_128 = (struct bt_uuid_128 *)chrc->uuid;
+                printk("Char UUID: ");
+                for (int i = 0; i < 16; i++) {
+                    printk("%02x", uuid_128->val[i]);
+                    if (i == 3 || i == 5 || i == 7 || i == 9) printk("-");
+                }
+                printk("\n");
+                
+                // Check for NUS RX (6E400002-B5A3-F393-E0A9-E50E24DCCA9E)
+                static const uint8_t nus_rx_uuid_val[] = {
+                    0x9E, 0xCA, 0xDC, 0x24, 0x0E, 0xE5, 0xA9, 0xE0, 
+                    0x93, 0xF3, 0xA3, 0xB5, 0x02, 0x00, 0x40, 0x6E
+                };
+                
+                // Check for NUS TX (6E400003-B5A3-F393-E0A9-E50E24DCCA9E)
+                static const uint8_t nus_tx_uuid_val[] = {
+                    0x9E, 0xCA, 0xDC, 0x24, 0x0E, 0xE5, 0xA9, 0xE0, 
+                    0x93, 0xF3, 0xA3, 0xB5, 0x03, 0x00, 0x40, 0x6E
+                };
+                
+                // Check if this is the RX characteristic
+                bool is_rx = true;
+                for (int i = 0; i < 16; i++) {
+                    if (uuid_128->val[i] != nus_rx_uuid_val[i]) {
+                        is_rx = false;
+                        break;
+                    }
+                }
+                
+                if (is_rx) {
+                    nus_rx_handle = chrc->value_handle;
+                    printk("Found RX characteristic: value_handle 0x%04x\n", nus_rx_handle);
+                    // Continue searching for TX
+                    return BT_GATT_ITER_CONTINUE;
+                }
+                
+                // Check if this is the TX characteristic
+                bool is_tx = true;
+                for (int i = 0; i < 16; i++) {
+                    if (uuid_128->val[i] != nus_tx_uuid_val[i]) {
+                        is_tx = false;
+                        break;
+                    }
+                }
+                
+                if (is_tx) {
+                    nus_tx_handle = chrc->value_handle;
+                    printk("Found TX characteristic: value_handle 0x%04x\n", nus_tx_handle);
+                    
+                    // Check if we found both characteristics
+                    if (nus_rx_handle != 0) {
+                        // We have both RX and TX, now find the CCC descriptor
+                        memset(params, 0, sizeof(*params));
+                        params->uuid = BT_UUID_GATT_CCC;
+                        params->start_handle = nus_tx_handle + 1;
+                        params->end_handle = nus_service_end_handle;
+                        params->type = BT_GATT_DISCOVER_DESCRIPTOR;
+                        params->func = discover_func;
 
-            // Find the CCC descriptor for enabling notifications
-            memset(params, 0, sizeof(*params));
-            params->uuid = BT_UUID_GATT_CCC;
-            params->start_handle = nus_tx_handle + 1;
-            params->end_handle = nus_service_end_handle;
-            params->type = BT_GATT_DISCOVER_DESCRIPTOR;
-            params->func = discover_func;
-
-            err = bt_gatt_discover(conn, params);
-            if (err) {
-                printk("CCC descriptor discovery failed (err %d)\n", err);
-                error_recovery();
+                        err = bt_gatt_discover(conn, params);
+                        if (err) {
+                            printk("CCC descriptor discovery failed (err %d)\n", err);
+                            error_recovery();
+                        }
+                        return BT_GATT_ITER_STOP;
+                    }
+                    
+                    // Keep looking for the RX characteristic
+                    return BT_GATT_ITER_CONTINUE;
+                }
             }
-        } else {
-            printk("Unknown characteristic found, continuing search\n");
+            
+            // Not a characteristic we're interested in
             return BT_GATT_ITER_CONTINUE;
         }
+        
         return BT_GATT_ITER_STOP;
     }
     // Stage 3: Found CCC descriptor
