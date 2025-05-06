@@ -168,11 +168,11 @@ int ble_handler_init(void)
         BT_DATA(BT_DATA_NAME_COMPLETE, "RentScan", 8),
     };
 
-    // Use more aggressive advertising parameters for better discoverability
+    // Use standard advertising parameters - the previous ones had issues
     struct bt_le_adv_param adv_param = BT_LE_ADV_PARAM_INIT(
-        BT_LE_ADV_OPT_CONNECTABLE | BT_LE_ADV_OPT_USE_NAME,
-        BT_GAP_ADV_FAST_INT_MIN_1,
-        BT_GAP_ADV_FAST_INT_MAX_1,
+        BT_LE_ADV_OPT_CONNECTABLE,
+        BT_GAP_ADV_FAST_INT_MIN_2,
+        BT_GAP_ADV_FAST_INT_MAX_2,
         NULL
     );
 

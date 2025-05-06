@@ -374,14 +374,25 @@ static bool check_device_name(struct bt_data *data, void *user_data)
 {
     // Looking for the device name in the advertising data
     if (data->type == BT_DATA_NAME_COMPLETE) {
+        printk("Name found in adv data: len=%u\n", data->data_len);
+        
+        // Print the name for debugging
+        char name_buf[32];
+        size_t name_len = MIN(data->data_len, sizeof(name_buf) - 1);
+        memcpy(name_buf, data->data, name_len);
+        name_buf[name_len] = '\0';
+        printk("Device name: '%s'\n", name_buf);
+        
+        // Check if it's "RentScan"
         if (data->data_len == 8 && memcmp(data->data, "RentScan", 8) == 0) {
             // Found the RentScan device!
-            printk("Found RentScan device\n");
+            printk("Found RentScan device!\n");
             device_found_flag = true;
+            return false; // Stop parsing
         }
     }
     
-    // Always return true to continue parsing all advertising data
+    // Continue parsing other advertising data
     return true;
 }
 
