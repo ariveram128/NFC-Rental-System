@@ -90,17 +90,23 @@ static uint8_t discover_func(struct bt_conn *conn,
         
         // If we've found the TX handle, subscribe to notifications
         if (nus_tx_handle) {
+            memset(&nus_tx_subscribe_params, 0, sizeof(nus_tx_subscribe_params));
             nus_tx_subscribe_params.value_handle = nus_tx_handle;
             nus_tx_subscribe_params.notify = nus_notify_callback;
             nus_tx_subscribe_params.value = BT_GATT_CCC_NOTIFY;
-            nus_tx_subscribe_params.ccc_handle = 0; /* Auto-discover CCC */
-            // The flags field is not an array, don't assign to it
+            
+            // Don't auto-discover CCC, we'll find the next handle manually
+            // This improves compatibility across different devices
+            nus_tx_subscribe_params.ccc_handle = nus_tx_handle + 1;
             
             err = bt_gatt_subscribe(conn, &nus_tx_subscribe_params);
             if (err && err != -EALREADY) {
                 printk("Subscribe failed (err %d)\n", err);
             } else {
                 printk("Subscribed to NUS TX characteristic\n");
+                
+                // Wait a moment before sending to make sure subscription is processed
+                k_sleep(K_MSEC(500));
                 
                 // Send a test message
                 const char *test_msg = "Hello from Central!";
