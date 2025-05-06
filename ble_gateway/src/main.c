@@ -86,6 +86,13 @@ static uint8_t ble_data_received(struct bt_nus_client *nus,
 	ARG_UNUSED(nus);
 
 	int err;
+	
+	// Create a temporary buffer to display the received message
+	char msg_buf[64];
+	uint16_t display_len = (len < 63) ? len : 63;
+	memcpy(msg_buf, data, display_len);
+	msg_buf[display_len] = '\0';
+	LOG_INF("BLE notification received: %s", msg_buf);
 
 	for (uint16_t pos = 0; pos != len;) {
 		struct uart_data_t *tx = k_malloc(sizeof(*tx));
@@ -298,8 +305,20 @@ static void discovery_complete(struct bt_gatt_dm *dm,
 
 	bt_gatt_dm_data_print(dm);
 
-	bt_nus_handles_assign(dm, nus);
-	bt_nus_subscribe_receive(nus);
+	int err = bt_nus_handles_assign(dm, nus);
+	if (err) {
+		LOG_ERR("Could not assign NUS handles (err %d)", err);
+		return;
+	}
+	
+	LOG_INF("NUS handles assigned successfully");
+	
+	err = bt_nus_subscribe_receive(nus);
+	if (err) {
+		LOG_ERR("Could not subscribe to NUS notifications (err %d)", err);
+	} else {
+		LOG_INF("NUS notifications subscribed successfully");
+	}
 
 	bt_gatt_dm_data_release(dm);
 }
