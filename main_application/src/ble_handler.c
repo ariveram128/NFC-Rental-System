@@ -115,30 +115,26 @@ static void status_work_handler(struct k_work *work)
     counter++;
     
     if (current_conn && !notifications_enabled) {
-        LOG_WRN("Connected but notifications not enabled by central (attempt %u)", counter);
+        LOG_WRN("Connected but notifications not enabled (attempt %u)", counter);
         
-        // The peripheral should not try to force notifications.
-        // It should wait for the central to enable them by writing to the CCCD.
-        // The error -22 (EINVAL) on the peripheral side when trying to send a notification
-        // before the central has enabled them is expected behavior.
-
-        // If we've been connected for a while (e.g., > 15 seconds) and still no notifications,
-        // it might indicate an issue on the central side or a pairing problem.
-        // For now, we just log. A more robust solution might involve disconnecting
-        // to allow the central to re-initiate the connection and subscription process.
-        if (counter > 15 && (counter % 5 == 0)) { // Log every 5 attempts after 15 initial attempts
-            LOG_WRN("Still no notifications from central after %u checks. Central needs to subscribe.", counter);
+        // Don't try to force notifications - the central must enable them
+        // by writing to the CCCD (Client Characteristic Configuration Descriptor)
+        
+        // Just log the warning - don't try to send data
+        
+        // After a long time without notifications, we could optionally disconnect
+        // to allow the central to reconnect with proper notification setup
+        if (counter > 60) { // After about a minute
+            LOG_WRN("No notifications enabled after %u attempts. Consider re-pairing.", counter);
+            // Uncomment to implement disconnect after timeout:
+            // bt_conn_disconnect(current_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
         }
-
     } else if (current_conn && notifications_enabled) {
         // Optionally, send a periodic heartbeat if notifications are enabled
-        // This can be useful for the central to know the peripheral is still alive.
-        // For example, every 30 seconds:
         if (counter % 30 == 0) {
             char heartbeat_msg[30];
             snprintf(heartbeat_msg, sizeof(heartbeat_msg), "Peripheral Heartbeat %u", counter / 30);
-            // ble_send(heartbeat_msg); // Uncomment to enable heartbeat
-            LOG_INF("Sent heartbeat (if enabled in ble_send)");
+            ble_send(heartbeat_msg); // Enable heartbeat to confirm notifications work
         }
     }
     
