@@ -63,6 +63,18 @@ int gateway_service_set_config(const char *config_key, const char *config_value)
 int gateway_service_get_config(const char *config_key, char *config_value, size_t config_value_len);
 
 /**
+ * @brief Get the backend error count
+ * 
+ * @return int The number of errors encountered
+ */
+int gateway_service_get_error_count(void);
+
+/**
+ * @brief Reset the backend error count
+ */
+void gateway_service_reset_error_count(void);
+
+/**
  * @brief Get error count for gateway service
  * 
  * @return uint32_t Number of errors encountered

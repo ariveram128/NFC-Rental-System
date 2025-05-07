@@ -3,7 +3,6 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/uart.h>
 #include <string.h>
-#include <stdio.h>
 #include "gateway_service.h"
 
 LOG_MODULE_REGISTER(gateway_service, LOG_LEVEL_INF);
@@ -12,17 +11,7 @@ LOG_MODULE_REGISTER(gateway_service, LOG_LEVEL_INF);
 #define MAX_CONFIG_KEY_LEN 32
 #define MAX_CONFIG_VALUE_LEN 64
 
-/* UART device for backend communication */
-#define UART_DEVICE_NODE DT_CHOSEN(zephyr_shell_uart)
-static const struct device *uart_dev;
-
-/* RX buffer for UART */
-static uint8_t rx_buf[256];
-static uint8_t rx_pos;
-
-/* Backend connection status and error counter */
 static bool backend_connected = false;
-static uint32_t error_count = 0;
 
 /* Settings subsystem */
 static int settings_set(const char *name, size_t len, settings_read_cb read_cb, void *cb_arg)
@@ -99,6 +88,36 @@ static void uart_cb(const struct device *dev, void *user_data)
 
 SETTINGS_STATIC_HANDLER_DEFINE(gateway, CONFIG_PREFIX, NULL, settings_set, NULL, NULL);
 
+/* Simulated backend connection check work handler */
+static void backend_sim_check_handler(struct k_work *work)
+{
+    /* Simulate backend connection state changes with some randomness */
+    int random_val = sys_rand32_get() % 10;
+    
+    if (!backend_connected && random_val >= 2) {
+        /* 80% chance to connect if disconnected */
+        backend_connected = true;
+        LOG_INF("Backend connection established");
+    } else if (backend_connected && random_val == 0) {
+        /* 10% chance to disconnect if connected */
+        backend_connected = false;
+        LOG_WRN("Backend connection lost");
+    }
+    
+    /* Periodically process stored messages to simulate backend sync */
+    if (backend_connected && backend_sim.message_count > 0) {
+        LOG_INF("Simulating backend message processing: %u messages in queue", 
+                backend_sim.message_count);
+        
+        /* Clear the queue to simulate successful processing */
+        backend_sim.message_count = 0;
+        backend_sim.last_sent_timestamp = k_uptime_get_32();
+    }
+    
+    /* Reschedule the work */
+    k_work_schedule(&backend_sim_check_work, K_MSEC(BACKEND_SIM_CHECK_INTERVAL_MS));
+}
+
 int gateway_service_init(void)
 {
     int err;
@@ -148,7 +167,18 @@ int gateway_service_init(void)
         uart_poll_out(uart_dev, hello_msg[i]);
     }
 
-    LOG_INF("Gateway service initialized");
+    /* Initialize backend simulation work */
+    k_work_init_delayable(&backend_sim_check_work, backend_sim_check_handler);
+    
+    /* Start the backend simulation check */
+    k_work_schedule(&backend_sim_check_work, K_MSEC(BACKEND_SIM_CHECK_INTERVAL_MS));
+
+    /* Use random seed to initialize backend connection state */
+    int random_val = sys_rand32_get() % 10;
+    backend_connected = (random_val >= 3); /* 70% chance to start as connected */
+
+    LOG_INF("Gateway service initialized (Backend %s)", 
+           backend_connected ? "connected" : "disconnected");
     return 0;
 }
 
@@ -158,66 +188,35 @@ int gateway_service_process_message(const rentscan_msg_t *msg)
         return -EINVAL;
     }
 
-    /* Create JSON message to send to backend */
-    char json_buf[256];
-    char tag_id_hex[MAX_TAG_ID_LEN * 2 + 1];
-    
-    /* Convert tag ID to hex string */
-    for (int i = 0; i < msg->tag_id_len; i++) {
-        sprintf(&tag_id_hex[i * 2], "%02x", msg->tag_id[i]);
-    }
-    tag_id_hex[msg->tag_id_len * 2] = '\0';
-    
-    /* Format JSON message */
-    snprintf(json_buf, sizeof(json_buf),
-             "{\"cmd\":%d,\"status\":%d,\"tag_id\":\"%s\",\"tag_id_len\":%d,"
-             "\"timestamp\":%lu,\"duration\":%lu}\n",
-             msg->cmd, msg->status, tag_id_hex, msg->tag_id_len,
-             (unsigned long)msg->timestamp, (unsigned long)msg->duration);
-    
-    LOG_DBG("Sending to backend: %s", json_buf);
-    
-    /* Send message over UART */
-    for (int i = 0; i < strlen(json_buf); i++) {
-        uart_poll_out(uart_dev, json_buf[i]);
-    }
-    
+    // For now, just log the message
+    // TODO: Implement actual backend communication
+    LOG_INF("Processing message command %d", msg->cmd);
     return 0;
 }
 
 int gateway_service_request_status(const uint8_t *tag_id, size_t tag_id_len)
 {
-    if (!tag_id || tag_id_len == 0) {
+    if (!tag_id || tag_id_len == 0 || tag_id_len > MAX_TAG_ID_LEN) {
         return -EINVAL;
     }
 
-    /* Create JSON message to send to backend */
-    char json_buf[256];
-    char tag_id_hex[MAX_TAG_ID_LEN * 2 + 1];
-    
-    /* Convert tag ID to hex string */
-    for (int i = 0; i < tag_id_len; i++) {
-        sprintf(&tag_id_hex[i * 2], "%02x", tag_id[i]);
-    }
-    tag_id_hex[tag_id_len * 2] = '\0';
-    
-    /* Format JSON message for status request */
-    snprintf(json_buf, sizeof(json_buf),
-             "{\"cmd\":%d,\"tag_id\":\"%s\",\"tag_id_len\":%d}\n",
-             CMD_STATUS_REQ, tag_id_hex, (int)tag_id_len);
-    
-    LOG_DBG("Requesting status from backend: %s", json_buf);
-    
-    /* Send message over UART */
-    for (int i = 0; i < strlen(json_buf); i++) {
-        uart_poll_out(uart_dev, json_buf[i]);
-    }
-    
+    // For now, just log the request
+    // TODO: Implement actual backend status request
+    LOG_INF("Requesting status for tag");
     return 0;
 }
 
 bool gateway_service_is_connected(void)
 {
+    /* Update backend status with a slight chance of temporary disconnection */
+    if (backend_connected) {
+        /* If connected, there's a small random chance of temporary disconnect */
+        int random_val = sys_rand32_get() % 100;
+        if (random_val < 3) {  /* 3% chance of temporary disconnection */
+            LOG_DBG("Temporary backend connection interruption");
+            return false;
+        }
+    }
     return backend_connected;
 }
 
@@ -236,6 +235,21 @@ int gateway_service_set_config(const char *config_key, const char *config_value)
         return err;
     }
 
+    /* For specific config keys, handle special behavior */
+    if (strcmp(config_key, "backend_connect") == 0) {
+        if (strcmp(config_value, "1") == 0 || 
+            strcmp(config_value, "true") == 0 || 
+            strcmp(config_value, "yes") == 0) {
+            backend_connected = true;
+            LOG_INF("Backend connection manually enabled");
+        } else if (strcmp(config_value, "0") == 0 || 
+                  strcmp(config_value, "false") == 0 || 
+                  strcmp(config_value, "no") == 0) {
+            backend_connected = false;
+            LOG_INF("Backend connection manually disabled");
+        }
+    }
+
     LOG_INF("Config set: %s = %s", config_key, config_value);
     return 0;
 }
@@ -249,16 +263,10 @@ int gateway_service_get_config(const char *config_key, char *config_value, size_
     char key[MAX_CONFIG_KEY_LEN];
     snprintf(key, sizeof(key), CONFIG_PREFIX "%s", config_key);
 
-    /* Instead of using settings_runtime_get, we'll store the value during settings_load
-     * and return it from our local storage. For now, return empty value.
-     */
+    // Instead of using settings_runtime_get, we'll store the value during settings_load
+    // and return it from our local storage
     memset(config_value, 0, config_value_len);
     
-    /* For now, return no data found */
+    // For now, return empty value and indicate no data found
     return -ENOENT;
-}
-
-uint32_t gateway_service_get_error_count(void)
-{
-    return error_count;
 }
