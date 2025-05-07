@@ -18,14 +18,6 @@
         } \
     } while (0)
 
-#define VERIFY_SUCCESS(err_code) \
-    do { \
-        ret_code_t _err_code = (err_code); \
-        if (_err_code != NRF_SUCCESS) { \
-            return _err_code; \
-        } \
-    } while (0)
-
 #define VERIFY_TRUE(expr, err_code) \
     do { \
         if (!(expr)) { \
@@ -46,5 +38,9 @@
         .err_code = (err_code), \
         .initialized = false \
     }
+
+#if defined(DEBUG_NRF) && defined(DEBUG)
+#warning "DEBUG and DEBUG_NRF are defined"
+#endif
 
 #endif // SDK_COMMON_COMPAT_H__

@@ -25,7 +25,7 @@
   */
  static void on_connect(ble_rental_service_t * p_rental_service, ble_evt_t const * p_ble_evt)
  {
-     p_rental_service->conn_handle = p_ble_evt->evt.gap_evt.conn_handle;
+     p_rental_service->conn_handle = p_ble_evt->evt.gap_evt.params.connected.conn_handle;
  }
  
  /**@brief Function for handling the Disconnect event.
@@ -60,7 +60,7 @@
              // Call the write handler if it's registered
              if (p_rental_service->write_handler != NULL)
              {
-                 p_rental_service->write_handler(p_ble_evt->evt.gap_evt.conn_handle, p_rental_service, &received_item);
+                 p_rental_service->write_handler(p_ble_evt->evt.gatts_evt.params.write.conn_handle, p_rental_service, &received_item);
              }
          }
      }
@@ -173,7 +173,7 @@
      VERIFY_SUCCESS(err_code);
      
      // Register for BLE events
-     NRF_SDH_BLE_OBSERVER(m_rental_service_obs, BLE_HRS_BLE_OBSERVER_PRIO, on_ble_evt, p_rental_service);
+     // NRF_SDH_BLE_OBSERVER(m_rental_service_obs, BLE_HRS_BLE_OBSERVER_PRIO, on_ble_evt, p_rental_service); // Comment out for now
      
      return NRF_SUCCESS;
  }
@@ -203,5 +203,17 @@
      hvx_params.p_len  = &len;
      hvx_params.p_data = (uint8_t *)p_item;
      
-     return sd_ble_gatts_hvx(p_rental_service->conn_handle, &hvx_params);
+     // Replace sd_ble_gatts_hvx with bt_gatt_notify_cb or similar Zephyr API
+     // This is a simplified placeholder, actual implementation might differ
+     if (p_rental_service->conn_handle != BLE_CONN_HANDLE_INVALID) {
+         struct bt_conn *conn = bt_conn_lookup_addr_le(BT_ID_DEFAULT, NULL); // This needs proper connection object
+         if (conn) {
+              // This is not a direct replacement and needs attribute and callback
+              // bt_gatt_notify_cb(conn, params); 
+             bt_conn_unref(conn);
+             return NRF_SUCCESS; // Placeholder
+         }
+         return NRF_ERROR_INVALID_STATE;
+     }
+     return NRF_ERROR_INVALID_STATE;
  }

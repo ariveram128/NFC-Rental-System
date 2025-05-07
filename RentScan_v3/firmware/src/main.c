@@ -21,7 +21,7 @@
  #include "nrf_log.h"
  #include "nrf_log_ctrl.h"
  #include "nrf_log_default_backends.h"
- #include "boards.h"
+ #include <zephyr/kernel.h>
  
  // BLE related includes
  #include "ble_advdata.h"

@@ -40,7 +40,7 @@
  static bool m_storage_busy = false;
  
  // Forward declarations
- static void fstorage_evt_handler(nrf_fstorage_evt_t * p_evt);
+ static void __attribute__((__unused__)) fstorage_evt_handler(nrf_fstorage_evt_t * p_evt);
  
  /**
   * @brief Initialize the storage manager
@@ -68,7 +68,7 @@
   * 
   * @param p_evt Fstorage event
   */
- static void fstorage_evt_handler(nrf_fstorage_evt_t * p_evt)
+ static void __attribute__((__unused__)) fstorage_evt_handler(nrf_fstorage_evt_t * p_evt)
  {
      if (p_evt->result != NRF_SUCCESS)
      {

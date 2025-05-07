@@ -214,14 +214,6 @@ static inline ret_code_t sd_ble_gatts_sys_attr_set(uint16_t conn_handle, uint8_t
     return 0;
 }
 
-/**
- * @brief Check if notifications are enabled
- */
-static inline bool ble_srv_is_notification_enabled(uint8_t const *p_data)
-{
-    return (p_data[0] & 0x01);
-}
-
 #ifdef __cplusplus
 }
 #endif
