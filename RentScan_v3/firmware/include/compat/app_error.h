@@ -9,8 +9,8 @@
 #ifndef APP_ERROR_H__
 #define APP_ERROR_H__
 
-#include <kernel.h>
-#include <sys/printk.h>
+#include <zephyr/kernel.h>
+#include <zephyr/sys/printk.h>
 
 #ifdef __cplusplus
 extern "C" {

@@ -9,9 +9,9 @@
 #ifndef NRF_LOG_CTRL_H__
 #define NRF_LOG_CTRL_H__
 
-#include <kernel.h>
-#include <logging/log.h>
-#include <logging/log_ctrl.h>
+#include <zephyr/kernel.h>
+#include <zephyr/logging/log.h>
+#include <zephyr/logging/log_ctrl.h>
 #include "nrf_log.h"
 
 #ifdef __cplusplus

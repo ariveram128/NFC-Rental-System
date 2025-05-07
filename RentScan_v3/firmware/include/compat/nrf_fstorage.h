@@ -11,8 +11,8 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include <kernel.h>
-#include <storage/flash_map.h>
+#include <zephyr/kernel.h>
+#include <zephyr/storage/flash_map.h>
 
 #ifdef __cplusplus
 extern "C" {
