@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <zephyr/kernel.h>
 #include <zephyr/sys/printk.h>
+#include <string.h>
 
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/hci.h>
@@ -11,21 +12,29 @@
 #include <zephyr/bluetooth/gatt.h>
 #include <zephyr/sys/byteorder.h>
 #include <zephyr/settings/settings.h>
+#include <zephyr/sys/util.h>
+
 
 // Debug macros for logging
 #define DEBUG_LOG printk
 
-// Nordic UART Service UUID
+// NUS UUIDs definition - using the original 6E400001-B5A3-F393-E0A9-E50E24DCCA9E format
+// These are defined in the reversed byte order as per Bluetooth specification
 #define BT_UUID_NUS_VAL \
-    BT_UUID_128_ENCODE(0x6E400001, 0xB5A3, 0xF393, 0xE0A9, 0xE50E24DCCA9E)
+	BT_UUID_128_ENCODE(0x6e400001, 0xb5a3, 0xf393, 0xe0a9, 0xe50e24dcca9e)
 #define BT_UUID_NUS_RX_VAL \
-    BT_UUID_128_ENCODE(0x6E400002, 0xB5A3, 0xF393, 0xE0A9, 0xE50E24DCCA9E)
+	BT_UUID_128_ENCODE(0x6e400002, 0xb5a3, 0xf393, 0xe0a9, 0xe50e24dcca9e)
 #define BT_UUID_NUS_TX_VAL \
-    BT_UUID_128_ENCODE(0x6E400003, 0xB5A3, 0xF393, 0xE0A9, 0xE50E24DCCA9E)
+	BT_UUID_128_ENCODE(0x6e400003, 0xb5a3, 0xf393, 0xe0a9, 0xe50e24dcca9e)
 
-#define BT_UUID_NUS_SERVICE BT_UUID_DECLARE_128(BT_UUID_NUS_VAL)
-#define BT_UUID_NUS_RX      BT_UUID_DECLARE_128(BT_UUID_NUS_RX_VAL)
-#define BT_UUID_NUS_TX      BT_UUID_DECLARE_128(BT_UUID_NUS_TX_VAL)
+#define BT_UUID_NUS        BT_UUID_DECLARE_128(BT_UUID_NUS_VAL)
+#define BT_UUID_NUS_RX     BT_UUID_DECLARE_128(BT_UUID_NUS_RX_VAL)
+#define BT_UUID_NUS_TX     BT_UUID_DECLARE_128(BT_UUID_NUS_TX_VAL)
+
+// Global variables
+static struct bt_uuid_128 nus_uuid = BT_UUID_INIT_128(BT_UUID_NUS_VAL);
+static struct bt_uuid_128 nus_rx_uuid = BT_UUID_INIT_128(BT_UUID_NUS_RX_VAL);
+static struct bt_uuid_128 nus_tx_uuid = BT_UUID_INIT_128(BT_UUID_NUS_TX_VAL);
 
 // Forward declarations
 static void start_scan(void);
@@ -35,7 +44,7 @@ static uint8_t discover_func(struct bt_conn *conn,
                          struct bt_gatt_discover_params *params);
 static void emergency_bt_reset(void);
 
-static struct bt_conn *default_conn;
+static struct bt_conn *current_conn;
 static struct bt_gatt_discover_params discover_params;
 static struct bt_gatt_subscribe_params nus_tx_subscribe_params;
 
@@ -90,7 +99,7 @@ static uint8_t nus_notify_callback(struct bt_conn *conn,
 // Function to send data to the peripheral via NUS RX characteristic
 static int send_to_peripheral(const char *data, uint16_t len)
 {
-    if (!default_conn) {
+    if (!current_conn) {
         DEBUG_LOG("Not connected - cannot send\n");
         return -ENOTCONN;
     }
@@ -108,7 +117,7 @@ static int send_to_peripheral(const char *data, uint16_t len)
     write_params.data = data;
     write_params.length = len;
 
-    int err = bt_gatt_write(default_conn, &write_params);
+    int err = bt_gatt_write(current_conn, &write_params);
     if (err) {
         printk("Failed to send data (err %d)\n", err);
     } else {
@@ -117,91 +126,110 @@ static int send_to_peripheral(const char *data, uint16_t len)
     return err;
 }
 
-// Error recovery handler - restart scanning when things go wrong
+// Error recovery function - includes robust disconnect and clean-up
 static void error_recovery(void)
 {
-    printk("Starting error recovery...\n");
+    int err;
+    static int recovery_attempts = 0;
     
-    // If we have a connection, disconnect it
-    if (default_conn) {
-        bt_conn_disconnect(default_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
-        bt_conn_unref(default_conn);
-        default_conn = NULL;
-    }
+    printk("*** Error recovery triggered (attempt %d) ***\n", ++recovery_attempts);
     
-    // Reset all handles
+    // Clean up the discovery parameters
+    memset(&discover_params, 0, sizeof(discover_params));
+    
+    // Reset all handles 
     nus_rx_handle = 0;
     nus_tx_handle = 0;
     nus_tx_ccc_handle = 0;
-    current_service_start_handle = 0;
     nus_service_end_handle = 0;
     
-    // Clear discovery params
-    memset(&discover_params, 0, sizeof(discover_params));
+    // Increment consecutive error counter for tracking persistent issues
+    consecutive_errors++; 
     
-    // Restart scanning after a delay
-    k_work_schedule(&start_scan_work, K_MSEC(1000));
+    // If we're having persistent issues, try more aggressive measures
+    if (consecutive_errors >= 3) {
+        printk("Multiple consecutive errors detected, performing full BT reset\n");
+        complete_bt_reset();
+        return;
+    }
     
-    printk("Error recovery complete\n");
+    // If we have a connection, try to disconnect gracefully first
+    if (current_conn) {
+        // Try to unsubscribe if we were subscribed
+        if (nus_tx_subscribe_params.value_handle != 0) {
+            printk("Unsubscribing from notifications\n");
+            err = bt_gatt_unsubscribe(current_conn, &nus_tx_subscribe_params);
+            if (err) {
+                printk("Unsubscribe failed (err %d)\n", err);
+                // Continue anyway, we'll reset everything
+            }
+            
+            // Reset subscription params
+            memset(&nus_tx_subscribe_params, 0, sizeof(nus_tx_subscribe_params));
+        }
+        
+        printk("Disconnecting from device\n");
+        err = bt_conn_disconnect(current_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+        if (err) {
+            printk("Disconnect failed (err %d)\n", err);
+        }
+        
+        // Wait a moment for the disconnect to happen
+        k_sleep(K_MSEC(200));
+        
+        // Release the connection reference
+        bt_conn_unref(current_conn);
+        current_conn = NULL;
+    }
+    
+    // Wait a bit before restarting scan
+    k_sleep(K_MSEC(1000));
+    
+    // Restart scanning
+    printk("Restarting scan\n");
+    start_scan();
 }
 
 // Update the connected callback to be simpler and more direct
-static void connected(struct bt_conn *conn, uint8_t conn_err)
+static void connected(struct bt_conn *conn, uint8_t err)
 {
-    char addr[BT_ADDR_LE_STR_LEN];
-    int err;
-
-    if (!conn) {
-        printk("ERROR: Connected callback with NULL connection pointer\n");
-        return;
-    }
-
-    bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
-
-    if (conn_err) {
-        printk("Failed to connect to %s (err %u)\n", addr, conn_err);
-        if (default_conn) {
-            bt_conn_unref(default_conn);
-            default_conn = NULL;
-        }
+    if (err) {
+        printk("Connection failed (err %u)\n", err);
+        // Attempt to start scanning again
+        current_conn = NULL;
         start_scan();
         return;
     }
 
-    printk("Connected: %s\n", addr);
-    default_conn = bt_conn_ref(conn);
+    printk("Connected\n");
+    current_conn = bt_conn_ref(conn);
+    last_connection_time = k_uptime_get();
+    consecutive_errors = 0; // Reset error counter on successful connection
 
     // Reset handles before discovery
     nus_rx_handle = 0;
     nus_tx_handle = 0;
     nus_tx_ccc_handle = 0;
-    current_service_start_handle = 0;
     nus_service_end_handle = 0;
-    
-    // Allow time to stabilize before service discovery
-    k_sleep(K_MSEC(500));
 
-    printk("Starting service discovery...\n");
-    
-    // Initialize discovery parameters
+    // Stop scanning, we're connected
+    err = bt_le_scan_stop();
+    if (err && err != -EALREADY) {
+        printk("Stop LE scan failed (err %d)\n", err);
+    }
+
+    // Start service discovery
     memset(&discover_params, 0, sizeof(discover_params));
+    discover_params.uuid = &nus_uuid.uuid;
     discover_params.func = discover_func;
     discover_params.start_handle = BT_ATT_FIRST_ATTRIBUTE_HANDLE;
     discover_params.end_handle = BT_ATT_LAST_ATTRIBUTE_HANDLE;
     discover_params.type = BT_GATT_DISCOVER_PRIMARY;
-    
-    // Start with a general service discovery (no UUID filter)
-    // This avoids issues with UUID comparison
-    printk("Discovery params: func %p, searching for all services\n", 
-           discover_params.func);
 
-    // Start service discovery
     err = bt_gatt_discover(conn, &discover_params);
     if (err) {
-        printk("Service discovery failed (err %d). Disconnecting.\n", err);
-        bt_conn_disconnect(conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
-    } else {
-        printk("Service discovery started successfully\n");
+        printk("Discover failed (err %d)\n", err);
+        error_recovery();
     }
 }
 
@@ -212,7 +240,7 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
     bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
     printk("Disconnected: %s (reason 0x%02x)\n", addr, reason);
 
-    if (default_conn != conn) {
+    if (current_conn != conn) {
         return;
     }
 
@@ -222,8 +250,8 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
         printk("Unsubscribed from NUS notifications\n");
     }
 
-    bt_conn_unref(default_conn);
-    default_conn = NULL;
+    bt_conn_unref(current_conn);
+    current_conn = NULL;
 
     // Reset handles and subscription state
     nus_rx_handle = 0;
@@ -249,283 +277,217 @@ static uint8_t discover_func(struct bt_conn *conn,
 {
     int err;
 
-    // Defensive check for NULL connection
-    if (!conn) {
-        printk("ERROR: NULL connection in discover_func\n");
-        error_recovery();
-        return BT_GATT_ITER_STOP;
-    }
-
-    // Defensive check for NULL params
-    if (!params) {
-        printk("ERROR: NULL discovery params\n");
-        error_recovery();
-        return BT_GATT_ITER_STOP;
-    }
-
-    // NOTE: We're intentionally not checking for NULL UUID here
-    // because params->uuid can be NULL when doing general service discovery
-    
     if (!attr) {
         printk("Discovery complete but target not found, type %u\n", params->type);
         
-        // If we were looking for the NUS service and didn't find it, trigger recovery
-        if (params->type == BT_GATT_DISCOVER_PRIMARY) {
-            printk("ERROR: NUS service not found, attempting different approach\n");
-            
-            // Try to find the Nordic UART Service by handle range using read by group type
+        // If we were looking for a specific UUID but didn't find it, try a more general approach
+        if (params->type == BT_GATT_DISCOVER_PRIMARY && params->uuid) {
+            // Try general service discovery instead
+            printk("Trying general service discovery without UUID filter\n");
             memset(params, 0, sizeof(*params));
-            params->uuid = NULL;  // Don't filter by UUID for initial discovery
+            params->func = discover_func;
             params->start_handle = BT_ATT_FIRST_ATTRIBUTE_HANDLE;
             params->end_handle = BT_ATT_LAST_ATTRIBUTE_HANDLE;
             params->type = BT_GATT_DISCOVER_PRIMARY;
-            params->func = discover_func;
             
-            printk("Starting general service discovery...\n");
             err = bt_gatt_discover(conn, params);
             if (err) {
                 printk("General service discovery failed (err %d)\n", err);
                 error_recovery();
             }
-        } else {
-            error_recovery();
+            return BT_GATT_ITER_STOP;
+        }
+        // If we were looking for characteristics but didn't find them, try a general char discovery
+        else if (params->type == BT_GATT_DISCOVER_CHARACTERISTIC && 
+                 (params->uuid == &nus_rx_uuid.uuid || params->uuid == &nus_tx_uuid.uuid)) {
+            
+            printk("Specific characteristic not found, trying general characteristic discovery\n");
+            // Clear the UUID to find all characteristics in this service
+            memset(params, 0, sizeof(*params));
+            params->start_handle = current_service_start_handle;
+            params->end_handle = nus_service_end_handle;
+            params->type = BT_GATT_DISCOVER_CHARACTERISTIC;
+            params->func = discover_func;
+            
+            err = bt_gatt_discover(conn, params);
+            if (err) {
+                printk("General characteristic discovery failed (err %d)\n", err);
+                error_recovery();
+            }
+            return BT_GATT_ITER_STOP;
         }
         
-        return BT_GATT_ITER_STOP;
-    }
-
-    printk("Discovery: attr handle 0x%04x, type %u\n", attr->handle, params->type);
-
-    // Stage 1: Discovered Primary Service
-    if (params->type == BT_GATT_DISCOVER_PRIMARY) {
-        if (!attr->user_data) {
-            printk("ERROR: NULL user_data for service\n");
+        if (params->type == BT_GATT_DISCOVER_DESCRIPTOR) {
+            printk("CCC descriptor not found, aborting\n");
             error_recovery();
             return BT_GATT_ITER_STOP;
         }
         
-        // Get service value
-        struct bt_gatt_service_val *service_val = attr->user_data;
+        // If no service found by UUID, start scanning again
+        printk("No matching service found, restarting scan\n");
+        error_recovery();
+        return BT_GATT_ITER_STOP;
+    }
+
+    // Stage 1: Found NUS Service
+    if (params->type == BT_GATT_DISCOVER_PRIMARY) {
+        struct bt_gatt_service_val *service_val = (struct bt_gatt_service_val *)attr->user_data;
         if (!service_val || !service_val->uuid) {
             printk("ERROR: Invalid service data\n");
             error_recovery();
             return BT_GATT_ITER_STOP;
         }
         
-        // Debug print the UUID
-        printk("Found service with UUID type %u\n", service_val->uuid->type);
+        // Log the found service UUID for debugging
+        if (service_val->uuid->type == BT_UUID_TYPE_128) {
+            struct bt_uuid_128 *uuid_128 = (struct bt_uuid_128 *)service_val->uuid;
+            printk("Service UUID: ");
+            for (int i = 0; i < 16; i++) {
+                printk("%02x", uuid_128->val[i]);
+            }
+            printk("\n");
+        }
         
         // Check if this is the NUS service
-        // First approach: try direct UUID comparison if we have a specific target
-        if (params->uuid) {
-            if (bt_uuid_cmp(service_val->uuid, params->uuid) != 0) {
-                printk("Not the target service, continuing search...\n");
-                return BT_GATT_ITER_CONTINUE;
+        if (bt_uuid_cmp(service_val->uuid, &nus_uuid.uuid) == 0) {
+            printk("NUS service found - start: 0x%04x, end: 0x%04x\n",
+                   attr->handle, service_val->end_handle);
+                   
+            current_service_start_handle = attr->handle;
+            nus_service_end_handle = service_val->end_handle;
+            
+            // Search for characteristics within this service
+            memset(params, 0, sizeof(*params));
+            params->start_handle = attr->handle + 1;
+            params->end_handle = service_val->end_handle;
+            params->type = BT_GATT_DISCOVER_CHARACTERISTIC;
+            params->func = discover_func;
+            
+            // Search for RX characteristic first
+            params->uuid = &nus_rx_uuid.uuid;
+            
+            err = bt_gatt_discover(conn, params);
+            if (err) {
+                printk("Characteristic discovery failed (err %d)\n", err);
+                error_recovery();
             }
-        } 
-        // Second approach: check for NUS UUID manually
-        else {
-            // For 128-bit UUIDs (which NUS uses)
-            if (service_val->uuid->type == BT_UUID_TYPE_128) {
-                struct bt_uuid_128 *uuid_128 = (struct bt_uuid_128 *)service_val->uuid;
-                // Print UUID for debugging
-                printk("Service UUID: ");
+            return BT_GATT_ITER_STOP;
+        }
+        
+        // Not the service we're looking for, continue searching
+        return BT_GATT_ITER_CONTINUE;
+    }
+    // Stage 2: Found either RX or TX characteristic
+    else if (params->type == BT_GATT_DISCOVER_CHARACTERISTIC) {
+        if (!attr) {
+            printk("No attribute found for characteristic discovery\n");
+            return BT_GATT_ITER_CONTINUE;
+        }
+        
+        if (!params->uuid) {
+            printk("No UUID for characteristic discovery\n");
+            return BT_GATT_ITER_CONTINUE;
+        }
+        
+        struct bt_gatt_chrc *chrc = (struct bt_gatt_chrc *)attr->user_data;
+        if (!chrc) {
+            printk("No characteristic data found\n");
+            return BT_GATT_ITER_CONTINUE;
+        }
+        
+        if (!chrc->uuid) {
+            printk("No UUID in characteristic data\n");
+            return BT_GATT_ITER_CONTINUE;
+        }
+
+        // Debug logging of UUID bytes
+        if (chrc->uuid->type == BT_UUID_TYPE_128) {
+            struct bt_uuid_128 *uuid_128 = (struct bt_uuid_128 *)chrc->uuid;
+            printk("Found characteristic with UUID-128: ");
+            for (int i = 0; i < 16; i++) {
+                printk("%02x", uuid_128->val[i]);
+            }
+            printk("\n");
+            
+            // Log the target UUIDs for comparison
+            if (nus_rx_uuid.type == BT_UUID_TYPE_128) {
+                struct bt_uuid_128 *rx_uuid = (struct bt_uuid_128 *)&nus_rx_uuid;
+                printk("Target RX UUID-128: ");
                 for (int i = 0; i < 16; i++) {
-                    printk("%02x", uuid_128->val[i]);
-                    if (i == 3 || i == 5 || i == 7 || i == 9) printk("-");
+                    printk("%02x", rx_uuid->val[i]);
                 }
                 printk("\n");
-                
-                // The NUS UUID is 6E400001-B5A3-F393-E0A9-E50E24DCCA9E
-                // Manually check if this is the NUS service
-                static const uint8_t nus_uuid_val[] = {
-                    0x9E, 0xCA, 0xDC, 0x24, 0x0E, 0xE5, 0xA9, 0xE0, 
-                    0x93, 0xF3, 0xA3, 0xB5, 0x01, 0x00, 0x40, 0x6E
-                };
-                
-                bool is_nus = true;
+            }
+            
+            if (nus_tx_uuid.type == BT_UUID_TYPE_128) {
+                struct bt_uuid_128 *tx_uuid = (struct bt_uuid_128 *)&nus_tx_uuid;
+                printk("Target TX UUID-128: ");
                 for (int i = 0; i < 16; i++) {
-                    if (uuid_128->val[i] != nus_uuid_val[i]) {
-                        is_nus = false;
-                        break;
-                    }
+                    printk("%02x", tx_uuid->val[i]);
                 }
-                
-                if (!is_nus) {
-                    printk("Not the NUS service, continuing search...\n");
-                    return BT_GATT_ITER_CONTINUE;
-                }
-            } else {
-                // Not a 128-bit UUID, can't be NUS
-                return BT_GATT_ITER_CONTINUE;
+                printk("\n");
             }
         }
         
-        // At this point, we've found the NUS service either through direct comparison
-        // or manual UUID checking
-        printk("Found NUS Service: attr_handle 0x%04x, end_handle 0x%04x\n",
-               attr->handle, service_val->end_handle);
-        
-        current_service_start_handle = attr->handle;
-        nus_service_end_handle = service_val->end_handle;
-
-        // Now discover NUS RX Characteristic 
-        memset(params, 0, sizeof(*params));
-        params->uuid = BT_UUID_NUS_RX;
-        params->start_handle = attr->handle + 1; 
-        params->end_handle = service_val->end_handle;
-        params->type = BT_GATT_DISCOVER_CHARACTERISTIC;
-        params->func = discover_func;
-
-        printk("Starting RX characteristic discovery...\n");
-        err = bt_gatt_discover(conn, params);
-        if (err) {
-            printk("Characteristic discovery failed (err %d)\n", err);
-            error_recovery();
-        }
-        return BT_GATT_ITER_STOP;
-    }
-    // Stage 2: Discovered Characteristic
-    else if (params->type == BT_GATT_DISCOVER_CHARACTERISTIC) {
-        if (!attr->user_data) {
-            printk("ERROR: NULL user_data for characteristic\n");
-            error_recovery();
-            return BT_GATT_ITER_STOP;
-        }
-        
-        struct bt_gatt_chrc *chrc = attr->user_data;
-        if (!chrc) {
-            printk("ERROR: NULL characteristic data\n");
-            error_recovery();
-            return BT_GATT_ITER_STOP;
-        }
-        
-        // Print the UUID type for debugging
-        printk("Found characteristic with UUID type %u\n", chrc->uuid->type);
-        
-        // Check if we're looking for a specific UUID
-        if (params->uuid) {
-            // Check if this is the RX or TX characteristic
-            if (bt_uuid_cmp(chrc->uuid, BT_UUID_NUS_RX) == 0) {
-                nus_rx_handle = chrc->value_handle;
-                printk("Found RX characteristic: value_handle 0x%04x\n", nus_rx_handle);
-
-                // Now look for the TX characteristic
-                memset(params, 0, sizeof(*params));
-                params->uuid = BT_UUID_NUS_TX;
-                params->start_handle = attr->handle + 1;
-                params->end_handle = nus_service_end_handle;
-                params->type = BT_GATT_DISCOVER_CHARACTERISTIC;
-                params->func = discover_func;
-
-                err = bt_gatt_discover(conn, params);
-                if (err) {
-                    printk("TX characteristic discovery failed (err %d)\n", err);
-                    error_recovery();
-                }
-            } else if (bt_uuid_cmp(chrc->uuid, BT_UUID_NUS_TX) == 0) {
-                nus_tx_handle = chrc->value_handle;
-                printk("Found TX characteristic: value_handle 0x%04x\n", nus_tx_handle);
-
-                // Find the CCC descriptor for enabling notifications
+        // Check for RX characteristic UUID
+        if (bt_uuid_cmp(chrc->uuid, &nus_rx_uuid) == 0) {
+            printk("Found RX characteristic\n");
+            nus_rx_handle = attr->handle + 1;  // +1 because handle is for declaration
+            printk("RX handle: 0x%04x\n", nus_rx_handle);
+            
+            // If we've found both RX and TX, move on to discovering CCC
+            if (nus_rx_handle && nus_tx_handle) {
+                printk("Found both RX and TX characteristics, looking for CCC descriptor\n");
+                
                 memset(params, 0, sizeof(*params));
                 params->uuid = BT_UUID_GATT_CCC;
                 params->start_handle = nus_tx_handle + 1;
                 params->end_handle = nus_service_end_handle;
                 params->type = BT_GATT_DISCOVER_DESCRIPTOR;
                 params->func = discover_func;
-
+                
                 err = bt_gatt_discover(conn, params);
                 if (err) {
-                    printk("CCC descriptor discovery failed (err %d)\n", err);
+                    printk("Descriptor discovery failed (err %d)\n", err);
                     error_recovery();
                 }
-            } else {
-                printk("Unknown characteristic found, continuing search\n");
-                return BT_GATT_ITER_CONTINUE;
+                return BT_GATT_ITER_STOP;
             }
-        }
-        // We're doing a general scan for characteristics
-        else {
-            // Print the UUID for debugging
-            if (chrc->uuid->type == BT_UUID_TYPE_128) {
-                struct bt_uuid_128 *uuid_128 = (struct bt_uuid_128 *)chrc->uuid;
-                printk("Char UUID: ");
-                for (int i = 0; i < 16; i++) {
-                    printk("%02x", uuid_128->val[i]);
-                    if (i == 3 || i == 5 || i == 7 || i == 9) printk("-");
-                }
-                printk("\n");
-                
-                // Check for NUS RX (6E400002-B5A3-F393-E0A9-E50E24DCCA9E)
-                static const uint8_t nus_rx_uuid_val[] = {
-                    0x9E, 0xCA, 0xDC, 0x24, 0x0E, 0xE5, 0xA9, 0xE0, 
-                    0x93, 0xF3, 0xA3, 0xB5, 0x02, 0x00, 0x40, 0x6E
-                };
-                
-                // Check for NUS TX (6E400003-B5A3-F393-E0A9-E50E24DCCA9E)
-                static const uint8_t nus_tx_uuid_val[] = {
-                    0x9E, 0xCA, 0xDC, 0x24, 0x0E, 0xE5, 0xA9, 0xE0, 
-                    0x93, 0xF3, 0xA3, 0xB5, 0x03, 0x00, 0x40, 0x6E
-                };
-                
-                // Check if this is the RX characteristic
-                bool is_rx = true;
-                for (int i = 0; i < 16; i++) {
-                    if (uuid_128->val[i] != nus_rx_uuid_val[i]) {
-                        is_rx = false;
-                        break;
-                    }
-                }
-                
-                if (is_rx) {
-                    nus_rx_handle = chrc->value_handle;
-                    printk("Found RX characteristic: value_handle 0x%04x\n", nus_rx_handle);
-                    // Continue searching for TX
-                    return BT_GATT_ITER_CONTINUE;
-                }
-                
-                // Check if this is the TX characteristic
-                bool is_tx = true;
-                for (int i = 0; i < 16; i++) {
-                    if (uuid_128->val[i] != nus_tx_uuid_val[i]) {
-                        is_tx = false;
-                        break;
-                    }
-                }
-                
-                if (is_tx) {
-                    nus_tx_handle = chrc->value_handle;
-                    printk("Found TX characteristic: value_handle 0x%04x\n", nus_tx_handle);
-                    
-                    // Check if we found both characteristics
-                    if (nus_rx_handle != 0) {
-                        // We have both RX and TX, now find the CCC descriptor
-                        memset(params, 0, sizeof(*params));
-                        params->uuid = BT_UUID_GATT_CCC;
-                        params->start_handle = nus_tx_handle + 1;
-                        params->end_handle = nus_service_end_handle;
-                        params->type = BT_GATT_DISCOVER_DESCRIPTOR;
-                        params->func = discover_func;
-
-                        err = bt_gatt_discover(conn, params);
-                        if (err) {
-                            printk("CCC descriptor discovery failed (err %d)\n", err);
-                            error_recovery();
-                        }
-                        return BT_GATT_ITER_STOP;
-                    }
-                    
-                    // Keep looking for the RX characteristic
-                    return BT_GATT_ITER_CONTINUE;
-                }
-            }
-            
-            // Not a characteristic we're interested in
+            // Otherwise, continue looking for the other characteristic
             return BT_GATT_ITER_CONTINUE;
         }
-        
-        return BT_GATT_ITER_STOP;
+        // Check for TX characteristic UUID
+        else if (bt_uuid_cmp(chrc->uuid, &nus_tx_uuid) == 0) {
+            printk("Found TX characteristic\n");
+            nus_tx_handle = attr->handle + 1;  // +1 because handle is for declaration
+            printk("TX handle: 0x%04x\n", nus_tx_handle);
+            
+            // If we've found both RX and TX, move on to discovering CCC
+            if (nus_rx_handle && nus_tx_handle) {
+                printk("Found both RX and TX characteristics, looking for CCC descriptor\n");
+                
+                memset(params, 0, sizeof(*params));
+                params->uuid = BT_UUID_GATT_CCC;
+                params->start_handle = nus_tx_handle + 1;
+                params->end_handle = nus_service_end_handle;
+                params->type = BT_GATT_DISCOVER_DESCRIPTOR;
+                params->func = discover_func;
+                
+                err = bt_gatt_discover(conn, params);
+                if (err) {
+                    printk("Descriptor discovery failed (err %d)\n", err);
+                    error_recovery();
+                }
+                return BT_GATT_ITER_STOP;
+            }
+            // Otherwise, continue looking for the other characteristic
+            return BT_GATT_ITER_CONTINUE;
+        }
+        // Not the characteristic we're looking for
+        else {
+            printk("Found other characteristic, continuing search\n");
+            return BT_GATT_ITER_CONTINUE;
+        }
     }
     // Stage 3: Found CCC descriptor
     else if (params->type == BT_GATT_DISCOVER_DESCRIPTOR) {
@@ -535,8 +497,19 @@ static uint8_t discover_func(struct bt_conn *conn,
             return BT_GATT_ITER_STOP;
         }
         
-        if (bt_uuid_cmp(params->uuid, BT_UUID_GATT_CCC) != 0) {
+        // Check if this is indeed a CCC descriptor
+        if (params->uuid && bt_uuid_cmp(params->uuid, BT_UUID_GATT_CCC) != 0) {
+            // Not a CCC, keep looking
             printk("Not a CCC descriptor, continuing search\n");
+            return BT_GATT_ITER_CONTINUE;
+        }
+        
+        // Print the handle for debugging
+        printk("Found descriptor with handle 0x%04x\n", attr->handle);
+        
+        // Double check that this is within range of the TX handle
+        if (attr->handle <= nus_tx_handle || attr->handle > nus_service_end_handle) {
+            printk("Descriptor handle out of expected range, continuing search\n");
             return BT_GATT_ITER_CONTINUE;
         }
     
@@ -551,6 +524,8 @@ static uint8_t discover_func(struct bt_conn *conn,
             return BT_GATT_ITER_STOP;
         }
 
+        printk("All required handles found! Setting up notification subscription...\n");
+        
         // Setup subscribe parameters
         memset(&nus_tx_subscribe_params, 0, sizeof(nus_tx_subscribe_params));
         nus_tx_subscribe_params.value_handle = nus_tx_handle;
@@ -558,23 +533,45 @@ static uint8_t discover_func(struct bt_conn *conn,
         nus_tx_subscribe_params.value = BT_GATT_CCC_NOTIFY;
         nus_tx_subscribe_params.notify = nus_notify_callback;
 
-        // Subscribe to notifications
+        // Subscribe to notifications with retry logic
         printk("Subscribing to notifications...\n");
-        err = bt_gatt_subscribe(conn, &nus_tx_subscribe_params);
-        if (err && err != -EALREADY) {
-            printk("Subscribe failed (err %d)\n", err);
-            error_recovery();
-        } else {
-            printk("Subscribed successfully\n");
-            
-            // Wait a moment before sending test data
-            k_sleep(K_MSEC(300));
-            
-            // Send a test message
-            const char *hello_msg = "Hello from Central!";
-            err = send_to_peripheral(hello_msg, strlen(hello_msg));
-            if (err) {
-                printk("Failed to send test message (err %d)\n", err);
+        int subscribe_retries = 0;
+        const int max_subscribe_retries = 5;
+        
+        while (subscribe_retries < max_subscribe_retries) {
+            err = bt_gatt_subscribe(conn, &nus_tx_subscribe_params);
+            if (err == 0) {
+                printk("Subscribed successfully\n");
+                
+                // Wait a moment before sending test data
+                k_sleep(K_MSEC(500));
+                
+                // Send a test message
+                const char *hello_msg = "Hello from Central!";
+                err = send_to_peripheral(hello_msg, strlen(hello_msg));
+                if (err) {
+                    printk("Failed to send test message (err %d)\n", err);
+                    // Don't trigger error recovery just for send failure
+                } else {
+                    printk("Test message sent successfully!\n");
+                }
+                break; // Success, exit retry loop
+            } else if (err == -EALREADY) {
+                printk("Already subscribed\n");
+                break; // Already subscribed, this is fine
+            } else {
+                subscribe_retries++;
+                printk("Subscribe failed (err %d), retry %d/%d\n", 
+                       err, subscribe_retries, max_subscribe_retries);
+                
+                if (subscribe_retries >= max_subscribe_retries) {
+                    printk("Maximum subscribe retries reached, giving up\n");
+                    error_recovery();
+                    break;
+                }
+                
+                // Wait before retrying
+                k_sleep(K_MSEC(500 * subscribe_retries));
             }
         }
         
@@ -609,29 +606,41 @@ static bool check_device_name(struct bt_data *data, void *user_data)
 }
 
 // Complete Bluetooth reset function
-static void complete_bt_reset(void)
+static int complete_bt_reset(void)
 {
     printk("Performing complete Bluetooth stack reset...\n");
     int err;
     
-    // First stop any scanning
-    bt_le_scan_stop();
+    // Make sure scan is stopped first, with retries for EAGAIN
+    for (int i = 0; i < 5; i++) {
+        err = bt_le_scan_stop();
+        if (err == 0) {
+            printk("Successfully stopped scanning\n");
+            break;
+        } else if (err == -EAGAIN || err == -11) {
+            printk("Scan stop got EAGAIN, retrying... (%d)\n", i+1);
+            k_sleep(K_MSEC(1000));
+        } else {
+            printk("Scan stop failed with err %d, continuing reset\n", err);
+            break;
+        }
+    }
     
     // Disconnect and clean up any connections
-    if (default_conn) {
+    if (current_conn) {
         printk("Disconnecting from existing connection...\n");
-        bt_conn_disconnect(default_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+        bt_conn_disconnect(current_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
         k_sleep(K_MSEC(100)); // Give time for disconnect to initiate
-        bt_conn_unref(default_conn);
-        default_conn = NULL;
+        bt_conn_unref(current_conn);
+        current_conn = NULL;
     }
     
     // Release all other resources
     // This will also terminate any active connections
-    printk("Closing any active connections...\n");
+    printk("Cleaning up resources...\n");
     
     // Wait to ensure controller processed disconnection
-    k_sleep(K_MSEC(500));
+    k_sleep(K_MSEC(1000));
     
     // Reset all handles and state variables
     printk("Resetting internal state...\n");
@@ -648,11 +657,20 @@ static void complete_bt_reset(void)
     
     // Disable Bluetooth completely - this is the key to resetting the stack
     printk("Disabling Bluetooth stack...\n");
-    err = bt_disable();
-    if (err) {
-        printk("Failed to disable Bluetooth (err %d)\n", err);
-    } else {
-        printk("Bluetooth disabled successfully\n");
+    
+    // Try to disable BT with retries for EAGAIN
+    for (int i = 0; i < 5; i++) {
+        err = bt_disable();
+        if (err == 0) {
+            printk("Bluetooth disabled successfully\n");
+            break;
+        } else if (err == -EAGAIN || err == -11) {
+            printk("BT disable got EAGAIN, retrying... (%d)\n", i+1);
+            k_sleep(K_MSEC(1000));
+        } else {
+            printk("Failed to disable Bluetooth (err %d), continuing reset\n", err);
+            break;
+        }
     }
     
     // Wait for controller to fully shut down - longer wait
@@ -660,15 +678,27 @@ static void complete_bt_reset(void)
     
     // Re-enable Bluetooth with our bt_ready callback
     printk("Re-enabling Bluetooth...\n");
-    err = bt_enable(bt_ready);
-    if (err) {
-        printk("Failed to re-enable Bluetooth (err %d)\n", err);
-        // Try one more time
-        k_sleep(K_MSEC(2000));
-        printk("Trying again to re-enable Bluetooth...\n");
+    
+    // Try to re-enable with retries
+    for (int i = 0; i < 5; i++) {
         err = bt_enable(bt_ready);
-        if (err) {
-            printk("Second attempt to re-enable Bluetooth failed (err %d)\n", err);
+        if (err == 0) {
+            printk("Bluetooth re-enabled successfully\n");
+            break;
+        } else if (err == -EAGAIN || err == -11) {
+            printk("BT enable got EAGAIN, retrying... (%d)\n", i+1);
+            k_sleep(K_MSEC(1000 * (i+1))); // Increasing backoff
+        } else {
+            printk("Failed to re-enable Bluetooth (err %d), trying once more\n", err);
+            k_sleep(K_MSEC(2000));
+            err = bt_enable(bt_ready);
+            if (err) {
+                printk("Second attempt to re-enable Bluetooth failed (err %d)\n", err);
+            } else {
+                printk("Second attempt to re-enable Bluetooth succeeded\n");
+                break;
+            }
+            break;
         }
     }
     
@@ -676,7 +706,8 @@ static void complete_bt_reset(void)
     k_sleep(K_MSEC(2000));
     
     printk("BT reset complete. Starting scan after delay...\n");
-    k_work_schedule(&start_scan_work, K_MSEC(1000));
+    k_work_schedule(&start_scan_work, K_MSEC(2000));
+    return 0;
 }
 
 static void device_found(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
@@ -713,10 +744,10 @@ static void device_found(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
             bt_le_scan_stop();
             
             // Reset all connection-related variables
-            if (default_conn) {
-                bt_conn_disconnect(default_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
-                bt_conn_unref(default_conn);
-                default_conn = NULL;
+            if (current_conn) {
+                bt_conn_disconnect(current_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+                bt_conn_unref(current_conn);
+                current_conn = NULL;
             }
             
             // Reset all handles and parameters to ensure clean state
@@ -733,7 +764,7 @@ static void device_found(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
 
             struct bt_le_conn_param *param = BT_LE_CONN_PARAM_DEFAULT;
             printk("Attempting to connect to %s\n", dev);
-            err = bt_conn_le_create(addr, BT_CONN_LE_CREATE_CONN, param, &default_conn);
+            err = bt_conn_le_create(addr, BT_CONN_LE_CREATE_CONN, param, &current_conn);
             if (err) {
                 printk("Create conn failed (err %d)\n", err);
                 
@@ -782,17 +813,19 @@ static void device_found(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
 static void start_scan(void)
 {
     int err;
+    int retry = 0;
+    const int max_retries = 5;
 
-    if (default_conn) {
+    if (current_conn) {
         // Check if the connection is valid
         struct bt_conn_info info;
-        err = bt_conn_get_info(default_conn, &info);
+        err = bt_conn_get_info(current_conn, &info);
         
         if (err || info.state != BT_CONN_STATE_CONNECTED) {
             printk("Connection in invalid state. Cleaning up...\n");
-            bt_conn_disconnect(default_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
-            bt_conn_unref(default_conn);
-            default_conn = NULL;
+            bt_conn_disconnect(current_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+            bt_conn_unref(current_conn);
+            current_conn = NULL;
             
             // Add a delay to allow cleanup
             k_sleep(K_MSEC(500));
@@ -811,13 +844,36 @@ static void start_scan(void)
         .window     = BT_GAP_SCAN_FAST_WINDOW,
     };
 
-    err = bt_le_scan_start(&scan_param, device_found);
-    if (err) {
-        if (err == -EALREADY) {
-            printk("Scan already started\n");
+    // Try multiple times if we get EAGAIN
+    while (retry < max_retries) {
+        err = bt_le_scan_start(&scan_param, device_found);
+        if (err) {
+            if (err == -EAGAIN || err == -11) { // -11 is EAGAIN
+                retry++;
+                printk("Scan start temporarily failed (EAGAIN), retry %d/%d\n", 
+                      retry, max_retries);
+                // Wait progressively longer between retries
+                k_sleep(K_MSEC(500 * retry));
+                continue;
+            } else if (err == -EALREADY) {
+                printk("Scan already started\n");
+                break;
+            } else {
+                printk("Scanning failed to start (err %d)\n", err);
+                // For other errors, back off and try again later
+                k_work_schedule(&start_scan_work, K_MSEC(2000));
+                return;
+            }
         } else {
-            printk("Scanning failed to start (err %d)\n", err);
+            // Success
+            break;
         }
+    }
+
+    if (retry >= max_retries) {
+        printk("WARNING: Failed to start scan after %d retries!\n", max_retries);
+        // Try to recover by resetting Bluetooth
+        complete_bt_reset();
         return;
     }
 
@@ -840,11 +896,11 @@ static void bt_ready(int err)
     printk("Bluetooth initialized\n");
     
     // Make sure any existing connections are cleaned up
-    if (default_conn) {
+    if (current_conn) {
         printk("Clearing existing connection on initialization\n");
-        bt_conn_disconnect(default_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
-        bt_conn_unref(default_conn);
-        default_conn = NULL;
+        bt_conn_disconnect(current_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+        bt_conn_unref(current_conn);
+        current_conn = NULL;
     }
     
     if (IS_ENABLED(CONFIG_SETTINGS)) {
@@ -905,64 +961,68 @@ static void emergency_bt_reset(void)
     k_sleep(K_MSEC(3000));
 }
 
-int main(void)
+void main(void)
 {
     int err;
-    printk("==== RentScan Central ====\n");
+
+    printk("BLE Central Starting\n");
     
-    // Initialize BLE stack
+    // Initialize Bluetooth with enhanced callback-based approach
     err = bt_enable(bt_ready);
     if (err) {
         printk("Bluetooth init failed (err %d)\n", err);
-        k_sleep(K_MSEC(1000));
-        
-        // Try once more
-        printk("Retrying Bluetooth initialization...\n");
-        err = bt_enable(bt_ready);
-        if (err) {
-            printk("Bluetooth re-init failed again (err %d)\n", err);
-            return 0;
-        }
+        return;
+    }
+
+    printk("Bluetooth initialized\n");
+    
+    // Make sure any existing connections are cleaned up
+    if (current_conn) {
+        printk("Clearing existing connection on initialization\n");
+        bt_conn_disconnect(current_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+        bt_conn_unref(current_conn);
+        current_conn = NULL;
     }
     
-    uint8_t consecutive_errors = 0;
-    uint8_t emergency_reset_count = 0;
-    uint64_t last_connection_time = 0;
+    // Initialize tracking variables
+    consecutive_errors = 0;
+    emergency_reset_count = 0;
+    last_connection_time = k_uptime_get();
     
+    // Main loop
     while (1) {
+        // Sleep for a bit to allow BT stack to process
         k_sleep(K_SECONDS(10));
         
         // Periodic check to recover from stuck states
-        if (!default_conn) {
+        if (!current_conn) {
             // If we're not connected, try to restart scan
             // This is safe to call even if already scanning
-            printk("Periodic check: ensuring scan is active\n");
-            start_scan();
+            int64_t time_since_last_conn = k_uptime_get() - last_connection_time;
             
-            // Check for persistent connection issues
-            uint64_t current_time = k_uptime_get();
-            if (current_time - last_connection_time > 120000) { // 2 minutes with no connection
+            if (time_since_last_conn > (2 * 60 * MSEC_PER_SEC)) {  // 2 minutes
                 consecutive_errors++;
+                printk("No connection for %lld seconds, consecutive_errors: %d\n", 
+                       time_since_last_conn / MSEC_PER_SEC, consecutive_errors);
                 
                 if (consecutive_errors >= 5 && emergency_reset_count < 2) {
-                    printk("Persistent connection issues detected! Triggering emergency reset...\n");
-                    consecutive_errors = 0;
-                    emergency_reset_count++;
-                    
-                    // Try emergency reset as a last resort
+                    printk("Too many consecutive failures - attempting emergency reset\n");
                     emergency_bt_reset();
-                    
-                    // Restart scanning after emergency reset
-                    k_sleep(K_MSEC(2000));
-                    start_scan();
+                    emergency_reset_count++;
+                    consecutive_errors = 0;
+                    last_connection_time = k_uptime_get();
+                } else {
+                    // Try a regular reset
+                    complete_bt_reset();
                 }
+            } else {
+                // Just ensure we're scanning
+                start_scan();
             }
         } else {
-            printk("Periodic check: connected to device\n");
+            // We have a connection, reset error counter
             consecutive_errors = 0;
             last_connection_time = k_uptime_get();
         }
     }
-    
-    return 0;
 }
