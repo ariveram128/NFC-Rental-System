@@ -305,11 +305,12 @@ static uint8_t discover_func(struct bt_conn *conn,
         }
         // If we were looking for characteristics but didn't find them, try a general char discovery
         else if (params->type == BT_GATT_DISCOVER_CHARACTERISTIC && 
-                 (params->uuid == &nus_rx_uuid.uuid || params->uuid == &nus_tx_uuid.uuid)) {
+                 (params->uuid == (struct bt_uuid *)&nus_rx_uuid || 
+                  params->uuid == (struct bt_uuid *)&nus_tx_uuid)) {
             
             printk("Specific characteristic not found, trying general characteristic discovery\n");
             // Clear the UUID to find all characteristics in this service
-        memset(params, 0, sizeof(*params));
+            memset(params, 0, sizeof(*params));
             params->start_handle = current_service_start_handle;
             params->end_handle = nus_service_end_handle;
             params->type = BT_GATT_DISCOVER_CHARACTERISTIC;
@@ -318,6 +319,85 @@ static uint8_t discover_func(struct bt_conn *conn,
             err = bt_gatt_discover(conn, params);
             if (err) {
                 printk("General characteristic discovery failed (err %d)\n", err);
+                error_recovery();
+            }
+            return BT_GATT_ITER_STOP;
+        }
+        
+        // Handle the case where we have at least RX characteristic but not found TX yet
+        else if (params->type == BT_GATT_DISCOVER_CHARACTERISTIC && 
+                 !params->uuid && nus_rx_handle && !nus_tx_handle) {
+            
+            printk("Found RX but not TX - trying TX-specific search\n");
+            // Try to find the TX characteristic specifically
+            memset(params, 0, sizeof(*params));
+            params->uuid = (struct bt_uuid *)&nus_tx_uuid;
+            params->start_handle = nus_rx_handle;  // Start from RX and search forward
+            params->end_handle = nus_service_end_handle;
+            params->type = BT_GATT_DISCOVER_CHARACTERISTIC;
+            params->func = discover_func;
+            
+            err = bt_gatt_discover(conn, params);
+            if (err) {
+                printk("TX-specific char discovery failed (err %d)\n", err);
+                // We still have the RX char, so we could try to proceed with partial functionality
+                printk("Proceeding with RX-only functionality\n");
+                error_recovery();
+            }
+            return BT_GATT_ITER_STOP;
+        }
+        
+        // Handle the case where descriptor discovery fails
+        else if (params->type == BT_GATT_DISCOVER_DESCRIPTOR && params->uuid == BT_UUID_GATT_CCC) {
+            printk("CCC descriptor not found, but will try to continue with TX handle\n");
+            
+            if (nus_tx_handle) {
+                // Try searching for CCC directly by handle range
+                uint16_t start_handle = nus_tx_handle + 1;
+                uint16_t end_handle = MIN(nus_service_end_handle, nus_tx_handle + 3);
+                
+                printk("Trying to find CCC by handle range: 0x%04x-0x%04x\n", 
+                       start_handle, end_handle);
+                
+                memset(params, 0, sizeof(*params));
+                params->uuid = NULL; // Search for any descriptor
+                params->start_handle = start_handle;
+                params->end_handle = end_handle;
+                params->type = BT_GATT_DISCOVER_DESCRIPTOR;
+                params->func = discover_func;
+                
+                err = bt_gatt_discover(conn, params);
+                if (err) {
+                    printk("Handle-based descriptor discovery failed (err %d)\n", err);
+                    // Fall back to using just TX handle without descriptor
+                    nus_tx_ccc_handle = nus_tx_handle + 1; // Guess CCC is right after char
+                    printk("Using estimated CCC handle: 0x%04x\n", nus_tx_ccc_handle);
+                    
+                    // Setup subscribe parameters
+                    memset(&nus_tx_subscribe_params, 0, sizeof(nus_tx_subscribe_params));
+                    nus_tx_subscribe_params.value_handle = nus_tx_handle;
+                    nus_tx_subscribe_params.ccc_handle = nus_tx_ccc_handle;
+                    nus_tx_subscribe_params.value = BT_GATT_CCC_NOTIFY;
+                    nus_tx_subscribe_params.notify = nus_notify_callback;
+                    
+                    // Try to subscribe
+                    err = bt_gatt_subscribe(conn, &nus_tx_subscribe_params);
+                    if (err && err != -EALREADY) {
+                        printk("Subscribe attempt failed (err %d)\n", err);
+                        error_recovery();
+                    } else {
+                        printk("Subscribe attempt may have succeeded\n");
+                        
+                        // Send a test message if we have RX handle
+                        if (nus_rx_handle) {
+                            const char *hello_msg = "Hello from Central!";
+                            send_to_peripheral(hello_msg, strlen(hello_msg));
+                        }
+                    }
+                }
+                return BT_GATT_ITER_STOP;
+            } else {
+                printk("No TX handle found, aborting\n");
                 error_recovery();
             }
             return BT_GATT_ITER_STOP;
@@ -605,11 +685,13 @@ static bool check_device_name(struct bt_data *data, void *user_data)
     return true;
 }
 
-// Complete Bluetooth reset function
+// Complete Bluetooth reset function with improved timeout protection
 static int complete_bt_reset(void)
 {
     printk("Performing complete Bluetooth stack reset...\n");
     int err;
+    int timeout_counter = 0;
+    const int max_timeout_retries = 3;
     
     // Make sure scan is stopped first, with retries for EAGAIN
     for (int i = 0; i < 5; i++) {
@@ -675,33 +757,59 @@ static int complete_bt_reset(void)
     
     // Wait for controller to fully shut down - longer wait
     k_sleep(K_MSEC(3000));
-    
-    // Re-enable Bluetooth with our bt_ready callback
-    printk("Re-enabling Bluetooth...\n");
-    
-    // Try to re-enable with retries
-    for (int i = 0; i < 5; i++) {
-        err = bt_enable(bt_ready);
-        if (err == 0) {
-            printk("Bluetooth re-enabled successfully\n");
-            break;
-        } else if (err == -EAGAIN || err == -11) {
-            printk("BT enable got EAGAIN, retrying... (%d)\n", i+1);
-            k_sleep(K_MSEC(1000 * (i+1))); // Increasing backoff
-        } else {
-            printk("Failed to re-enable Bluetooth (err %d), trying once more\n", err);
-            k_sleep(K_MSEC(2000));
+
+    // Re-enable Bluetooth with our bt_ready callback using a timeout mechanism
+    // to prevent assertion failures during command timeout
+    while (timeout_counter < max_timeout_retries) {
+        printk("Re-enabling Bluetooth (attempt %d/%d)...\n", 
+               timeout_counter + 1, max_timeout_retries);
+        
+        // Try to re-enable with retries
+        for (int i = 0; i < 5; i++) {
             err = bt_enable(bt_ready);
-            if (err) {
-                printk("Second attempt to re-enable Bluetooth failed (err %d)\n", err);
+            if (err == 0) {
+                printk("Bluetooth re-enabled successfully\n");
+                // Success! Reset timeout counter and proceed
+                timeout_counter = 0;
+                goto reset_complete;
+            } else if (err == -EAGAIN || err == -11) {
+                printk("BT enable got EAGAIN, retrying... (%d)\n", i+1);
+                k_sleep(K_MSEC(1000 * (i+1))); // Increasing backoff
             } else {
-                printk("Second attempt to re-enable Bluetooth succeeded\n");
+                printk("Failed to re-enable Bluetooth (err %d)\n", err);
                 break;
             }
-            break;
         }
+        
+        // If we got here, all retries failed - increment timeout counter
+        timeout_counter++;
+        
+        // If we've hit max retries for timeouts, do an emergency recovery
+        if (timeout_counter >= max_timeout_retries) {
+            printk("CRITICAL: Maximum enable retries exceeded\n");
+            printk("Attempting fallback recovery strategy...\n");
+            
+            // Give the system time to recover
+            k_sleep(K_MSEC(5000));
+            
+            // Last ditch effort - if this fails, we'll return an error
+            err = bt_enable(bt_ready);
+            if (err) {
+                printk("Fallback recovery failed (err %d), system may need reboot\n", err);
+                // Just start scanning anyway to attempt recovery
+                k_work_schedule(&start_scan_work, K_MSEC(3000));
+                return err;
+            } else {
+                printk("Fallback recovery succeeded\n");
+                break;
+            }
+        }
+        
+        // Wait longer before next timeout retry attempt
+        k_sleep(K_MSEC(5000));
     }
-    
+
+reset_complete:
     // Wait for BT stack to fully initialize
     k_sleep(K_MSEC(2000));
     
@@ -732,20 +840,23 @@ static void device_found(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
         bt_data_parse(ad, check_device_name, NULL);
         
         if (device_found_flag) {
-            err = bt_le_scan_stop();
-            if (err) {
-                printk("Stop LE scan failed (err %d)\n", err);
-                return;
+            // Stop scanning first with retries
+            for (int i = 0; i < 3; i++) {
+                err = bt_le_scan_stop();
+                if (err == 0 || err == -EALREADY) {
+                    break;
+                }
+                printk("Stop scan retry %d/3 (err %d)\n", i+1, err);
+                k_sleep(K_MSEC(100));
             }
             
-            // Aggressive approach: Always assume there might be a stale connection
-            // and try to clean it up proactively
+            // Force clean state regardless of scan stop status
             printk("Force cleaning connection state for device...\n");
-            bt_le_scan_stop();
             
-            // Reset all connection-related variables
+            // Reset all connection-related variables including clearing connection state
             if (current_conn) {
                 bt_conn_disconnect(current_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+                k_sleep(K_MSEC(100)); // Give time for disconnect to process
                 bt_conn_unref(current_conn);
                 current_conn = NULL;
             }
@@ -762,14 +873,32 @@ static void device_found(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
             // Force a delay to allow the controller state to settle
             k_sleep(K_MSEC(1000));
 
+            // Before attempting connection, try to clear any "ghost" connections
+            // This direct call to the controller helps clear stale state
+            struct bt_hci_cp_le_create_conn *cp;
+            uint16_t handle = 0;
+            struct net_buf *buf = bt_hci_cmd_create(BT_HCI_OP_LE_CREATE_CONN_CANCEL, 0);
+            if (buf) {
+                err = bt_hci_cmd_send_sync(BT_HCI_OP_LE_CREATE_CONN_CANCEL, buf, NULL);
+                if (err) {
+                    printk("Failed to cancel any pending connections (err %d)\n", err);
+                } else {
+                    printk("Successfully canceled any pending connections\n");
+                    // Additional delay to let controller process the command
+                    k_sleep(K_MSEC(500));
+                }
+            }
+
+            // Set connection parameters for better reliability
             struct bt_le_conn_param *param = BT_LE_CONN_PARAM_DEFAULT;
             printk("Attempting to connect to %s\n", dev);
             err = bt_conn_le_create(addr, BT_CONN_LE_CREATE_CONN, param, &current_conn);
+            
             if (err) {
                 printk("Create conn failed (err %d)\n", err);
                 
                 // Check if we have the "Found valid connection in disconnected state" error
-                if (err == -EINVAL) {
+                if (err == -EINVAL || err == -22) {  // -22 is EINVAL
                     retry_count++;
                     total_retry_count++;
                     
@@ -795,15 +924,35 @@ static void device_found(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
                     // Wait longer between attempts
                     k_sleep(K_MSEC(2000));
                     
+                    // Attempt to force clear the connection
+                    // This is an aggressive approach that might help in some cases
+                    buf = bt_hci_cmd_create(BT_HCI_OP_RESET, 0);
+                    if (buf) {
+                        printk("Sending HCI_RESET to controller\n");
+                        err = bt_hci_cmd_send_sync(BT_HCI_OP_RESET, buf, NULL);
+                        if (err) {
+                            printk("HCI reset failed (err %d)\n", err);
+                        }
+                        // Let controller recover after reset
+                        k_sleep(K_MSEC(1000));
+                    }
+                    
                     // Then start a fresh scan after a delay
                     k_work_schedule(&start_scan_work, K_MSEC(3000));
+                    return;
+                }
+                // Handle EAGAIN error separately
+                else if (err == -EAGAIN || err == -11) {
+                    printk("Controller busy (EAGAIN), waiting before retry\n");
+                    k_sleep(K_MSEC(2000));
+                    start_scan();
                     return;
                 }
                 
                 retry_count = 0;
                 start_scan();
             } else {
-                 printk("Connection creation initiated.\n");
+                printk("Connection creation initiated.\n");
                 retry_count = 0;
             }
         }
