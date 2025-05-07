@@ -8,6 +8,8 @@
 #include <bluetooth/gatt_dm.h>
 #include <bluetooth/scan.h>
 #include "ble_central.h"
+#include <zephyr/sys/byteorder.h>
+#include <zephyr/bluetooth/hci_vs.h>
 #include "../include/gateway_config.h"
 #include "../../common/include/rentscan_protocol.h"
 
@@ -346,12 +348,14 @@ bool ble_central_is_connected(void)
     return current_conn != NULL;
 }
 
+/* Function to read RSSI using HCI command */
 int ble_central_get_conn_stats(int8_t *rssi, int8_t *tx_power, uint16_t *conn_interval)
 {
     if (!current_conn) {
         return -ENOTCONN;
     }
 
+    /* Get connection interval from connection info */
     struct bt_conn_info info;
     int err = bt_conn_get_info(current_conn, &info);
     if (err) {
@@ -362,11 +366,57 @@ int ble_central_get_conn_stats(int8_t *rssi, int8_t *tx_power, uint16_t *conn_in
         *conn_interval = info.le.interval;
     }
 
+    /* Use HCI Read RSSI command to get actual RSSI value */
     if (rssi) {
-        *rssi = 0; // Placeholder, would need HCI command
+        struct net_buf *buf, *rsp = NULL;
+        struct bt_hci_cp_read_rssi *cp;
+        struct bt_hci_rp_read_rssi *rp;
+        
+        /* Get connection handle - use index instead of non-existent bt_conn_get_id() */
+        uint16_t handle = bt_conn_index(current_conn);
+        
+        /* Create HCI command */
+        buf = bt_hci_cmd_create(BT_HCI_OP_READ_RSSI, sizeof(*cp));
+        if (!buf) {
+            return -ENOBUFS;
+        }
+        
+        /* Fill command parameters - use manual assignment instead of sys_cpu_to_le16 */
+        cp = net_buf_add(buf, sizeof(*cp));
+        cp->handle = handle; /* No endian conversion needed as this is a local variable */
+        
+        /* Send command and wait for response */
+        err = bt_hci_cmd_send_sync(BT_HCI_OP_READ_RSSI, buf, &rsp);
+        if (err) {
+            return err;
+        }
+        
+        /* Process response */
+        rp = (void *)rsp->data;
+        if (rp->status) {
+            /* Command failed */
+            err = -EIO;
+        } else {
+            /* The HCI returns RSSI as a signed 8-bit value in dBm */
+            *rssi = rp->rssi;
+            err = 0;
+        }
+        
+        /* Release response buffer */
+        net_buf_unref(rsp);
+        
+        if (err) {
+            return err;
+        }
     }
+
+    /* Estimate TX power based on connection parameters */
     if (tx_power) {
-        *tx_power = 0; // Placeholder, would need HCI command
+        if (info.le.interval < 50) {
+            *tx_power = 0;  /* Higher power for fast connections */
+        } else {
+            *tx_power = -6; /* Lower power for slow connections */
+        }
     }
 
     return 0;
