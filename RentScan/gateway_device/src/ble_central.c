@@ -86,6 +86,12 @@ static void device_found(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
         return;
     }
 
+    // Check if we're already connected or have a valid connection object
+    if (current_conn) {
+        LOG_DBG("Already connected to a device, ignoring %s", addr_str);
+        return;
+    }
+
     LOG_INF("Found RentScan device %s, RSSI %d", addr_str, rssi);
 
     // Stop scanning
@@ -94,6 +100,8 @@ static void device_found(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
         LOG_ERR("Stop scan failed (err %d)", err);
         return;
     }
+
+    scanning = false;
 
     // Create connection parameters
     struct bt_conn_le_create_param create_param = BT_CONN_LE_CREATE_PARAM_INIT(
@@ -209,13 +217,12 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 
     LOG_INF("Disconnected from %s (reason 0x%02x)", addr, reason);
 
-    if (conn == current_conn) {
+    if (current_conn) {
         bt_conn_unref(current_conn);
         current_conn = NULL;
-        nus_rx_handle = 0;
-        nus_tx_handle = 0;
     }
 
+    /* Return to scanning */
     scanning = false;
     start_scan();
 }
@@ -337,10 +344,24 @@ int ble_central_disconnect(void)
 
 int ble_central_reset(void)
 {
-    ble_central_disconnect();
-    bt_disable();
-    k_sleep(K_MSEC(1000));
-    return bt_enable(NULL);
+    /* First, properly disconnect and clean up any existing connection */
+    if (current_conn) {
+        bt_conn_disconnect(current_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+        bt_conn_unref(current_conn);
+        current_conn = NULL;
+    }
+
+    /* Stop any active scanning */
+    if (scanning) {
+        bt_le_scan_stop();
+        scanning = false;
+    }
+
+    LOG_INF("BLE central reset");
+    
+    /* Restart scanning */
+    start_scan();
+    return 0;
 }
 
 bool ble_central_is_connected(void)
