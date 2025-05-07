@@ -44,21 +44,22 @@ This guide provides step-by-step instructions to demo the RentScan NFC-based ren
    [00:00:00.789,428] <inf> ble_central: Connected to device FC:4E:16:98:0D:96
    ```
 
-2. Observe the Main device logs:
+2. **CRITICAL**: Wait for GATT service discovery and subscription to complete. You MUST see these additional logs on the gateway:
    ```
-   [00:00:29.935,760] <inf> ble_service: Connected
+   [xx:xx:xx.xxx,xxx] <inf> ble_central: RentScan service found, discovering RX characteristic
+   [xx:xx:xx.xxx,xxx] <inf> ble_central: RX characteristic found
+   [xx:xx:xx.xxx,xxx] <inf> ble_central: TX characteristic found
+   [xx:xx:xx.xxx,xxx] <inf> ble_central: CCC descriptor found, subscribing to notifications
+   [xx:xx:xx.xxx,xxx] <inf> ble_central: Successfully subscribed to notifications
    ```
 
-3. **CRITICAL**: Wait for the GATT subscription to complete. You must see this on the gateway:
+3. On the main device, you should see:
    ```
-   [xx:xx:xx.xxx,xxx] <inf> ble_central: Service discovery completed
-   ```
-   And this on the main device:
-   ```
+   [00:00:29.935,760] <inf> ble_service: Connected
    [xx:xx:xx.xxx,xxx] <inf> ble_service: Client subscribed to notifications
    ```
 
-**IMPORTANT**: Ensure BLE connection is fully established including service discovery and subscription before proceeding. If not fully connected, reset both devices and wait for the complete connection sequence.
+**IMPORTANT**: DO NOT proceed to scanning NFC tags until you see the "Successfully subscribed to notifications" message on the gateway logs. The BLE connection is not fully ready until this point.
 
 ### Step 3: Scan an NFC tag for the first time (start rental)
 
@@ -99,6 +100,23 @@ This guide provides step-by-step instructions to demo the RentScan NFC-based ren
    ```
 
 ## Troubleshooting
+
+### Incomplete BLE Connection
+
+The most common issue is scanning NFC tags before the BLE connection is fully established. The complete connection sequence requires:
+
+1. Initial connection (logs will show "Connected to device")
+2. Service discovery (logs will show several "[ATTRIBUTE] handle X" messages)
+3. Characteristic discovery (logs will show "RX/TX characteristic found")
+4. Subscription (logs will show "Successfully subscribed to notifications")
+
+**If any step is missing, the connection is incomplete and tag data will not be transmitted.**
+
+To resolve this:
+1. Reset both devices using the physical reset buttons
+2. Wait at least 30 seconds after seeing "Connected to device" before scanning any tags
+3. Verify that you see the "Successfully subscribed to notifications" message
+4. Only then proceed with scanning NFC tags
 
 ### BLE Connection Issues
 

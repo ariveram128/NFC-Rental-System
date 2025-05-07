@@ -1,121 +1,93 @@
-# RentScan - Wireless NFC Tag Rental System
+# RentScan: NFC-Based Rental System
 
-A robust implementation of a rental system using NFC tags and Bluetooth Low Energy (BLE) communication.
+RentScan is a wireless rental management system that uses NFC technology to track items and manage rentals. The system consists of two main components: a main device (NFC reader) and a gateway device that processes rental information.
 
-## Architecture Overview
+## System Overview
 
-The system consists of two main components:
+The RentScan system enables a simple, contactless rental process:
 
-1. **Main Device** (NFC reader + BLE peripheral):
-   - NFC tag reader for scanning items
-   - BLE peripheral for wireless communication
-   - Rental state management
+1. The main device reads NFC tags attached to rental items
+2. The gateway device manages the rental database and communicates with a backend
+3. When a tag is scanned, the rental status is toggled (available → rented, or rented → returned)
 
-2. **Gateway Device** (BLE central + backend connector):
-   - BLE central for connecting to main devices
-   - Backend communication for data forwarding
-   - Shell interface for management
+## Components
 
-## Directory Structure
+- **Main Device**: nRF52840 with NFC reading capabilities
+  - Reads NTAG216 NFC tags
+  - Processes tag data
+  - Communicates with gateway via BLE
 
-```
-RentScan/
-│
-├── common/                 # Common code shared between devices
-│   └── include/            # Common header files
-│       └── rentscan_protocol.h  # Communication protocol definition
-│
-├── main_device/            # Main device (NFC reader + BLE peripheral)
-│   ├── include/            # Header files for main device
-│   │   └── main_device_config.h  # Configuration parameters
-│   └── src/                # Source files for main device
-│       ├── main.c          # Main application
-│       ├── nfc_handler.h/c # NFC handling functionality
-│       ├── ble_service.h/c # BLE peripheral service
-│       └── rental_manager.h/c # Rental state management
-│
-└── gateway_device/         # Gateway device (BLE central + backend connector)
-    ├── include/            # Header files for gateway device
-    │   └── gateway_config.h # Configuration parameters
-    └── src/                # Source files for gateway device
-        ├── main.c          # Main application
-        ├── ble_central.h/c # BLE central functionality
-        └── gateway_service.h/c # Backend communication service
-```
+- **Gateway Device**: nRF52840 with BLE central capabilities
+  - Maintains rental database
+  - Processes tag data from main device
+  - Simulates backend connectivity
+  - Provides command-line interface for management
 
-## Features
+## Current Implementation
 
-- **NFC Tag Reading/Writing**: Reads and writes NDEF data from/to NFC tags
-- **BLE Communication**: Robust BLE connectivity with error recovery
-- **Rental Management**: Tracking rental state, expiration, etc.
-- **Gateway Functions**: Forwarding rental data to backend systems
-- **Shell Interface**: Command-line management of gateway device
-- **Modular Design**: Clean separation of concerns with well-defined interfaces
+The system currently provides the following functionality:
 
-## Building and Flashing
+- NFC tag reading from the main device
+- BLE connectivity between devices
+- Rental management (start/end rentals, check rental status)
+- Simulated backend connection with offline queuing
 
-### Prerequisites
+## Known Issues
 
-- nRF Connect SDK v2.5.1
-- nRF52840 DK (for both main and gateway devices)
-- NFC tags (NTAG21x series recommended)
+1. **BLE GATT Subscription**: The gateway device sometimes fails to properly subscribe to BLE notifications from the main device. This causes a "Device is not subscribed to characteristic" error when trying to send tag data.
 
-### Building the Main Device
+2. **BLE Connection Stability**: Occasionally, the system encounters "Found valid connection in disconnected state" errors that require device reset.
 
-```bash
-cd RentScan
-west build -p -b nrf52840dk_nrf52840 main_device
-west flash
-```
+3. **Manual Command Issue**: Some shell commands like `manual_sub` and `show_handles` are not recognized properly due to build configuration issues.
 
-### Building the Gateway Device
+## Demo Workaround
 
-```bash
-cd RentScan
-west build -p -b nrf52840dk_nrf52840 gateway_device
-west flash
-```
+For demonstration purposes, the system can be operated with this workflow:
 
-## Usage
+1. The main device successfully reads NFC tags and displays the tag ID
+2. The gateway device can manually start/end rentals using the CLI:
+   ```
+   rentscan rental start <tag_id> <user_id> <duration>
+   rentscan rental end <tag_id>
+   ```
 
-### Main Device
+## Future Improvements
 
-1. Power on the main device
-2. Bring an NFC tag close to the antenna
-3. The device will read the tag and process the rental operation
-4. Status will be sent to the gateway over BLE
+1. **Robust BLE Implementation**: Implement proper retry mechanisms for GATT discovery and handle connection edge cases more gracefully.
 
-### Gateway Device
+2. **Enhanced Security**: Add encryption for NFC and BLE communication to protect rental data.
 
-1. Power on the gateway device
-2. It will automatically scan for and connect to main devices
-3. Use the shell commands to manage the system:
+3. **User Authentication**: Implement user identification through separate NFC cards or mobile app integration.
 
-```
-rentscan status             # Show current status
-rentscan scan start         # Start scanning for devices
-rentscan scan stop          # Stop scanning
-rentscan whitelist add <addr> # Add device to whitelist
-rentscan reset              # Reset the BLE stack
-```
+4. **Actual Backend Integration**: Replace the simulated backend with a real cloud database service.
 
-## Troubleshooting
+5. **Battery Optimization**: Implement power management features to extend battery life for portable deployment.
 
-- **Connection Issues**: Use `rentscan reset` to reset the BLE stack if connections fail
-- **Scan Not Working**: Check that no active connections exist before scanning
-- **Tag Reading Problems**: Ensure proper antenna positioning and tag compatibility
+6. **Mobile Application**: Develop a companion mobile app to manage rentals and view rental history.
 
-## Design Considerations
+## Complete System Vision
 
-- **Error Recovery**: Robust error handling with automatic recovery mechanisms
-- **Power Management**: Efficient BLE parameters to reduce power consumption
-- **Memory Safety**: No dynamic memory allocation for increased stability
-- **Modularity**: Clean component interfaces for easier maintenance
+In a full implementation, the RentScan system would work as follows:
 
-## License
+When a customer wants to rent an item:
+1. They bring the item to a rental station
+2. The item's NFC tag is scanned by the main device
+3. The main device reads the unique tag ID and sends it to the gateway
+4. The gateway checks if the item is available and starts a rental
+5. A receipt could be printed or sent electronically
+6. The item status is updated in the backend database
 
-[Insert license information here]
+When the item is returned:
+1. The item's tag is scanned again
+2. The main device reads the tag ID and sends it to the gateway
+3. The gateway recognizes the item is already rented and ends the rental
+4. Rental duration and any fees are calculated
+5. The item becomes available for the next customer
 
-## Contributors
+The system could be expanded to multiple stations, all connected to a central backend, enabling items to be rented from one location and returned to another.
 
-[Insert contributor information here] 
+## See Also
+
+- [DEMO_GUIDE.md](DEMO_GUIDE.md) - Detailed instructions for demonstrating the system
+- [gateway_device/README.md](gateway_device/README.md) - Gateway device documentation
+- [main_device/README.md](main_device/README.md) - Main device documentation 

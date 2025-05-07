@@ -15,11 +15,12 @@
 
 LOG_MODULE_REGISTER(ble_central, LOG_LEVEL_INF);
 
-static struct bt_conn *current_conn;
-static struct bt_gatt_discover_params discover_params;
-static struct bt_gatt_subscribe_params subscribe_params;
-static uint16_t nus_rx_handle;
-static uint16_t nus_tx_handle;
+// Make these variables accessible to shell_commands.c
+struct bt_conn *current_conn;
+struct bt_gatt_discover_params discover_params;
+struct bt_gatt_subscribe_params subscribe_params;
+uint16_t nus_rx_handle;
+uint16_t nus_tx_handle;
 
 static ble_msg_received_cb_t msg_callback;
 static bool scanning = false;
@@ -136,45 +137,144 @@ static uint8_t discover_func(struct bt_conn *conn,
     int err;
 
     if (!attr) {
-        LOG_INF("Discover complete");
+        LOG_INF("Discover complete - attr is NULL");
+        
+        // Workaround: If we've discovered the primary service but not the characteristics,
+        // try to manually set up the subscription
+        if (nus_tx_handle == 0) {
+            LOG_WRN("Incomplete discovery. Using manual subscription...");
+            
+            // We'll assume handle values based on the found service
+            uint16_t primary_handle = discover_params.start_handle - 1;
+            LOG_INF("Primary service was at handle %d", primary_handle);
+            
+            // Typical handle layout: Primary(n), RX(n+2, value n+3), TX(n+4, value n+5), CCC(n+6)
+            nus_rx_handle = primary_handle + 3;
+            nus_tx_handle = primary_handle + 5;
+            
+            LOG_INF("Using estimated handles: RX=%d, TX=%d, CCC=%d", 
+                    nus_rx_handle, nus_tx_handle, primary_handle + 6);
+            
+            // Set up subscription with estimated CCC handle
+            subscribe_params.notify = notify_handler;
+            subscribe_params.value = BT_GATT_CCC_NOTIFY;
+            subscribe_params.value_handle = nus_tx_handle;
+            subscribe_params.ccc_handle = primary_handle + 6;
+            
+            err = bt_gatt_subscribe(conn, &subscribe_params);
+            if (err && err != -EALREADY) {
+                LOG_ERR("Manual subscribe failed (err %d)", err);
+            } else {
+                LOG_INF("Manual subscription attempt successful");
+            }
+        }
+        
         (void)memset(params, 0, sizeof(*params));
         return BT_GATT_ITER_STOP;
     }
 
-    LOG_INF("[ATTRIBUTE] handle %u", attr->handle);
+    LOG_INF("[ATTRIBUTE] handle %u, UUID: %s", attr->handle, bt_uuid_str(attr->uuid));
 
     if (!bt_uuid_cmp(discover_params.uuid, BT_UUID_RENTSCAN)) {
+        LOG_INF("RentScan service found at handle %u, discovering RX characteristic", attr->handle);
         discover_params.uuid = BT_UUID_RENTSCAN_RX;
         discover_params.start_handle = attr->handle + 1;
+        discover_params.end_handle = BT_ATT_LAST_ATTRIBUTE_HANDLE;
         discover_params.type = BT_GATT_DISCOVER_CHARACTERISTIC;
 
         err = bt_gatt_discover(conn, &discover_params);
         if (err) {
-            LOG_ERR("Discover failed (err %d)", err);
+            LOG_ERR("Discover RX characteristic failed (err %d)", err);
+            
+            // Try the workaround directly
+            if (err == -ENOENT || err == -ENOMEM) {
+                LOG_WRN("Trying manual subscription due to discovery error");
+                uint16_t primary_handle = attr->handle;
+                nus_rx_handle = primary_handle + 3;
+                nus_tx_handle = primary_handle + 5;
+                
+                subscribe_params.notify = notify_handler;
+                subscribe_params.value = BT_GATT_CCC_NOTIFY;
+                subscribe_params.value_handle = nus_tx_handle;
+                subscribe_params.ccc_handle = primary_handle + 6;
+                
+                err = bt_gatt_subscribe(conn, &subscribe_params);
+                if (err && err != -EALREADY) {
+                    LOG_ERR("Manual subscribe failed (err %d)", err);
+                } else {
+                    LOG_INF("Manual subscription successful");
+                }
+            }
         }
-    } else if (!bt_uuid_cmp(discover_params.uuid, BT_UUID_RENTSCAN_RX)) {
+        return BT_GATT_ITER_STOP;
+    } 
+    
+    if (!bt_uuid_cmp(discover_params.uuid, BT_UUID_RENTSCAN_RX)) {
+        LOG_INF("RX characteristic found at handle %u", attr->handle);
         nus_rx_handle = bt_gatt_attr_value_handle(attr);
+        LOG_INF("RX value handle: %u", nus_rx_handle);
+        
         discover_params.uuid = BT_UUID_RENTSCAN_TX;
         discover_params.start_handle = attr->handle + 1;
+        discover_params.end_handle = BT_ATT_LAST_ATTRIBUTE_HANDLE;
         discover_params.type = BT_GATT_DISCOVER_CHARACTERISTIC;
 
         err = bt_gatt_discover(conn, &discover_params);
         if (err) {
-            LOG_ERR("Discover failed (err %d)", err);
+            LOG_ERR("Discover TX characteristic failed (err %d)", err);
         }
-    } else if (!bt_uuid_cmp(discover_params.uuid, BT_UUID_RENTSCAN_TX)) {
+        return BT_GATT_ITER_STOP;
+    } 
+    
+    if (!bt_uuid_cmp(discover_params.uuid, BT_UUID_RENTSCAN_TX)) {
+        LOG_INF("TX characteristic found at handle %u", attr->handle);
         nus_tx_handle = bt_gatt_attr_value_handle(attr);
+        LOG_INF("TX value handle: %u", nus_tx_handle);
 
+        /* Find the CCC descriptor */
+        discover_params.uuid = BT_UUID_GATT_CCC;
+        discover_params.start_handle = attr->handle + 1;
+        discover_params.end_handle = BT_ATT_LAST_ATTRIBUTE_HANDLE;
+        discover_params.type = BT_GATT_DISCOVER_DESCRIPTOR;
+        
+        err = bt_gatt_discover(conn, &discover_params);
+        if (err) {
+            LOG_ERR("Discover CCC failed (err %d)", err);
+            
+            // Try with estimated CCC handle
+            LOG_WRN("Trying with estimated CCC handle");
+            subscribe_params.notify = notify_handler;
+            subscribe_params.value = BT_GATT_CCC_NOTIFY;
+            subscribe_params.value_handle = nus_tx_handle;
+            subscribe_params.ccc_handle = attr->handle + 2;
+            
+            err = bt_gatt_subscribe(conn, &subscribe_params);
+            if (err && err != -EALREADY) {
+                LOG_ERR("Subscribe with estimated handle failed (err %d)", err);
+            } else {
+                LOG_INF("Subscription with estimated handle successful");
+            }
+        }
+        return BT_GATT_ITER_STOP;
+    }
+    
+    if (!bt_uuid_cmp(discover_params.uuid, BT_UUID_GATT_CCC)) {
+        LOG_INF("CCC descriptor found at handle %u, subscribing to notifications", attr->handle);
+        
         subscribe_params.notify = notify_handler;
         subscribe_params.value = BT_GATT_CCC_NOTIFY;
         subscribe_params.value_handle = nus_tx_handle;
-        subscribe_params.ccc_handle = attr->handle + 2;
+        subscribe_params.ccc_handle = attr->handle;
+        LOG_INF("Setting up subscription with value_handle=%u, ccc_handle=%u", 
+                nus_tx_handle, attr->handle);
 
         err = bt_gatt_subscribe(conn, &subscribe_params);
         if (err && err != -EALREADY) {
             LOG_ERR("Subscribe failed (err %d)", err);
+        } else {
+            LOG_INF("Successfully subscribed to notifications");
         }
-
+        
         return BT_GATT_ITER_STOP;
     }
 

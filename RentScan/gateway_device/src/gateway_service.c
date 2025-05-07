@@ -31,6 +31,7 @@ typedef struct {
     uint8_t config_values[MAX_CONFIG_VALUE_LEN];
     rental_info_t active_rentals[MAX_ACTIVE_RENTALS];
     uint8_t rental_count;
+    bool connected;
 } backend_sim_t;
 
 static backend_sim_t backend_sim = {
@@ -494,4 +495,57 @@ int gateway_service_get_error_count(void)
 void gateway_service_reset_error_count(void)
 {
     backend_error_count = 0;
+}
+
+int gateway_service_get_status(gateway_service_status_t *status)
+{
+    if (!status) {
+        return -EINVAL;
+    }
+    
+    status->backend_connected = backend_connected;
+    status->error_count = backend_error_count;
+    status->queue_size = backend_sim.message_count;
+    status->rental_count = backend_sim.rental_count;
+    
+    return 0;
+}
+
+int gateway_service_reset_errors(void)
+{
+    backend_error_count = 0;
+    return 0;
+}
+
+int gateway_service_connect_backend(void)
+{
+    backend_connected = true;
+    backend_sim.connected = true;
+    
+    /* Process any queued messages immediately */
+    if (backend_sim.message_count > 0) {
+        LOG_INF("Processing %d queued messages", backend_sim.message_count);
+        backend_sim.message_count = 0;
+    }
+    
+    LOG_INF("Backend connection established (manual)");
+    return 0;
+}
+
+int gateway_service_disconnect_backend(void)
+{
+    backend_connected = false;
+    backend_sim.connected = false;
+    LOG_WRN("Backend connection lost (manual)");
+    return 0;
+}
+
+int gateway_service_get_rental(uint32_t index, rental_info_t *rental)
+{
+    if (!rental || index >= backend_sim.rental_count) {
+        return -EINVAL;
+    }
+    
+    memcpy(rental, &backend_sim.active_rentals[index], sizeof(rental_info_t));
+    return 0;
 }

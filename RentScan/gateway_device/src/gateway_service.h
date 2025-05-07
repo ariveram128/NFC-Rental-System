@@ -18,6 +18,14 @@ typedef struct {
     bool active;                       /* Whether rental is active */
 } rental_info_t;
 
+/* Gateway service status structure */
+typedef struct {
+    bool backend_connected;            /* Whether backend is connected */
+    uint32_t error_count;              /* Count of errors */
+    uint32_t queue_size;               /* Size of message queue */
+    uint32_t rental_count;             /* Count of active rentals */
+} gateway_service_status_t;
+
 /**
  * @brief Initialize the gateway service
  * 
@@ -63,61 +71,41 @@ int gateway_service_end_rental(const char *item_id);
 int gateway_service_get_rental_status(const char *item_id, rentscan_status_t *status);
 
 /**
- * @brief Get all active rentals
+ * @brief Get gateway service status
  * 
- * @param rentals Array to store rental info
- * @param max_count Maximum number of rentals to store
- * @param count Pointer to store actual number of rentals
+ * @param status Pointer to store status
  * @return int 0 on success, negative error code otherwise
  */
-int gateway_service_get_active_rentals(rental_info_t *rentals, size_t max_count, size_t *count);
+int gateway_service_get_status(gateway_service_status_t *status);
 
 /**
- * @brief Request status for a tag from the backend
+ * @brief Reset error count
  * 
- * @param tag_id Pointer to tag ID
- * @param tag_id_len Length of tag ID
  * @return int 0 on success, negative error code otherwise
  */
-int gateway_service_request_status(const uint8_t *tag_id, size_t tag_id_len);
+int gateway_service_reset_errors(void);
 
 /**
- * @brief Check connection to backend
+ * @brief Get rental information by index
  * 
- * @return true if connected
- * @return false if not connected
- */
-bool gateway_service_is_connected(void);
-
-/**
- * @brief Set gateway configuration
- * 
- * @param config_key Configuration key
- * @param config_value Configuration value
+ * @param index Index of rental
+ * @param rental Pointer to store rental information
  * @return int 0 on success, negative error code otherwise
  */
-int gateway_service_set_config(const char *config_key, const char *config_value);
+int gateway_service_get_rental(uint32_t index, rental_info_t *rental);
 
 /**
- * @brief Get gateway configuration
+ * @brief Connect to backend
  * 
- * @param config_key Configuration key
- * @param config_value Buffer to store configuration value
- * @param config_value_len Length of buffer
- * @return int Length of configuration value or negative error code
+ * @return int 0 on success, negative error code otherwise
  */
-int gateway_service_get_config(const char *config_key, char *config_value, size_t config_value_len);
+int gateway_service_connect_backend(void);
 
 /**
- * @brief Get the backend error count
+ * @brief Disconnect from backend
  * 
- * @return int The number of errors encountered
+ * @return int 0 on success, negative error code otherwise
  */
-int gateway_service_get_error_count(void);
-
-/**
- * @brief Reset the backend error count
- */
-void gateway_service_reset_error_count(void);
+int gateway_service_disconnect_backend(void);
 
 #endif /* GATEWAY_SERVICE_H */ 
