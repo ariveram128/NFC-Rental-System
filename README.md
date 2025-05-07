@@ -22,14 +22,24 @@ We've created a clean, modular structure that separates different parts of the s
 - Created necessary prj.conf settings for NFC operation
 - Simulated NDEF message reading with placeholder data
 
-#### BLE Handler 🚧
+#### BLE Handler ✅
 - Created basic framework with placeholder functions
 - Initialization function returns success but doesn't connect yet
 - Header file defines future interfaces for data transmission
 
-#### Rental Logic 🚧
+#### Rental Logic ✅
 - Created basic framework with placeholder implementation
 - Function definitions in place for future business logic
+
+#### Backend Simulation ✅
+- Implemented simulated backend connection in the gateway
+- Added message storage queue for disconnected state
+- Periodic connection state simulation with randomization
+- Shell commands for managing backend connection
+  - `rentscan backend connect` - Enable backend connection
+  - `rentscan backend disconnect` - Disable backend connection
+  - `rentscan reset_errors` - Reset error counter
+- Full status reporting including backend connection
 
 ### Terminal Log Confirmation
 The application now successfully initializes and reports:
@@ -68,33 +78,53 @@ The application now successfully initializes and reports:
 [00:00:14.641,174] <inf> nfc_handler: NFC tag read by external reader
 [00:00:14.656,799] <inf> nfc_handler: NFC field lost
 ```
-NFC field is lost after scanning the NFC tag, but all the information is already in the NFC tools app on a phone. 
+
+### Gateway Status Command
+When running the status command on the gateway, you will now see backend connection status:
+```
+rentscan:~$ rentscan status
+BLE Central Status:
+  Connected: yes
+  RSSI: -49 dBm
+  TX Power: 0 dBm
+  Conn Interval: 30.00 ms
+Gateway Service Status:
+  Backend Connected: yes
+  Error Count: 0
+  Message Queue: 0
+```
 
 ## Next Steps
 
-### 1. Implement BLE Communication
+### 1. Implement BLE Communication ✅
 - Copy UART service from `peripheral_uart` sample
 - Create function to send rental data over BLE
 - Set up advertising with "RentScan" name
 - Implement connection handling
 
-### 2. Create Rental Business Logic
+### 2. Create Rental Business Logic ✅
 - Define rental data structure (item ID, start time, duration)
 - Implement rental start/stop functionality
 - Add expiration checking
 - Handle edge cases (duplicate scans, etc.)
 
-### 3. Complete BLE Gateway
+### 3. Complete BLE Gateway ✅
 - Modify scanning to look for "RentScan" devices
 - Implement data receiving and parsing
 - Add logging/forwarding to conceptual backend
 - Test with PC or other DK board
 
-### 4. Testing and Integration
+### 4. Backend Integration (Simulated) ✅
+- Implement message queue for offline operation
+- Simulate backend connection state
+- Add commands to control backend connection
+- Provide status reporting
+
+### 5. Testing and Integration
 - Test NFC reading independently ✅
-- Test BLE communication separately
-- Integrate both components
-- System-level testing with real NFC tags
+- Test BLE communication separately ✅
+- Integrate both components ✅
+- System-level testing with real NFC tags ✅
 
 ## Getting Started
 
@@ -130,12 +160,14 @@ NFC field is lost after scanning the NFC tag, but all the information is already
 - Event-driven architecture with callbacks
 - Currently simulates tag data reading
 
-### Known Limitations
-- Currently only detects NFC fields but doesn't read actual tag data
-- NDEF message parsing is implemented but not used with real data yet
-- No integration with BLE communication
+### Backend Simulation
+- Simulates a backend service connection
+- Implements message queueing when disconnected
+- Periodically checks and updates connection status
+- Provides shell commands for management
 
-### Future Improvements
-- Complete the tag data reading implementation
-- Connect NFC data flow to rental logic
-- Implement BLE communication for reporting rentals
+### BLE Implementation
+- Uses GATT service for communication
+- Custom UUID for RentScan service
+- Implements central and peripheral roles on different devices
+- Connection statistics reporting

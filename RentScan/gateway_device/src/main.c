@@ -6,6 +6,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/shell/shell.h>
+#include <zephyr/settings/settings.h>
 #include <string.h>
 #include <stdio.h>
 
@@ -238,8 +239,53 @@ static int cmd_status(const struct shell *shell, size_t argc, char *argv[])
     
     shell_print(shell, "Gateway Service Status:");
     shell_print(shell, "  Backend Connected: %s", gateway_service_is_connected() ? "yes" : "no");
-    shell_print(shell, "  Error Count: %d", consecutive_errors);
+    shell_print(shell, "  Error Count: %d", gateway_service_get_error_count());
     
+    /* Get queue count if available */
+    char queue_count[16] = {0};
+    if (gateway_service_get_config("queue_count", queue_count, sizeof(queue_count)) > 0) {
+        shell_print(shell, "  Message Queue: %s", queue_count);
+    }
+    
+    return 0;
+}
+
+/* Shell command to manage backend connection */
+static int cmd_backend(const struct shell *shell, size_t argc, char *argv[])
+{
+    if (argc != 2) {
+        shell_print(shell, "Usage: backend <connect|disconnect>");
+        return -EINVAL;
+    }
+    
+    if (strcmp(argv[1], "connect") == 0) {
+        int err = gateway_service_set_config("backend_connect", "true");
+        if (err) {
+            shell_error(shell, "Failed to connect to backend: %d", err);
+            return err;
+        }
+        shell_print(shell, "Backend connection requested");
+        return 0;
+    } else if (strcmp(argv[1], "disconnect") == 0) {
+        int err = gateway_service_set_config("backend_connect", "false");
+        if (err) {
+            shell_error(shell, "Failed to disconnect from backend: %d", err);
+            return err;
+        }
+        shell_print(shell, "Backend disconnection requested");
+        return 0;
+    } else {
+        shell_error(shell, "Unknown command: %s", argv[1]);
+        shell_print(shell, "Usage: backend <connect|disconnect>");
+        return -EINVAL;
+    }
+}
+
+/* Shell command to reset error count */
+static int cmd_reset_errors(const struct shell *shell, size_t argc, char *argv[])
+{
+    gateway_service_reset_error_count();
+    shell_print(shell, "Error count reset");
     return 0;
 }
 
@@ -269,6 +315,8 @@ SHELL_STATIC_SUBCMD_SET_CREATE(sub_cmds,
     SHELL_CMD(reset, NULL, "Reset BLE stack", cmd_ble_reset),
     SHELL_CMD(config, &config_cmds, "Manage configuration", NULL),
     SHELL_CMD(status, NULL, "Show status", cmd_status),
+    SHELL_CMD(backend, NULL, "Control backend connection", cmd_backend),
+    SHELL_CMD(reset_errors, NULL, "Reset error count", cmd_reset_errors),
     SHELL_SUBCMD_SET_END
 );
 
