@@ -6,6 +6,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/settings/settings.h>
+#include <zephyr/bluetooth/bluetooth.h>  /* Add this for bt_enable/disable functions */
 #include <string.h>
 
 #include "../include/main_device_config.h"
@@ -158,18 +159,33 @@ int main(void)
         return err;
     }
     
-    /* Start BLE advertising with retry on EAGAIN */
-    err = ble_service_start_advertising(true);
+    /* Start BLE advertising with retry on error */
+    for (int retry = 0; retry < 5; retry++) {
+        err = ble_service_start_advertising(true);
+        if (err == 0) {
+            break;  // Success
+        }
+        
+        LOG_WRN("BLE advertising start failed (attempt %d): %d", retry+1, err);
+        k_sleep(K_MSEC(500 * (retry + 1)));  // Progressive backoff
+        
+        // For specific errors, try a Bluetooth system reset
+        if (err == -EINVAL && retry == 2) {
+            LOG_INF("Attempting Bluetooth subsystem reset");
+            bt_disable();
+            k_sleep(K_MSEC(1000));
+            err = bt_enable(NULL);
+            if (err) {
+                LOG_ERR("Bluetooth re-init failed: %d", err);
+                continue;
+            }
+            k_sleep(K_MSEC(100));
+        }
+    }
+    
     if (err) {
-        if (err == -EAGAIN) {
-            LOG_WRN("BLE stack busy, retrying advertising in 2s...");
-            k_sleep(K_MSEC(2000));
-            err = ble_service_start_advertising(true);
-        }
-        if (err) {
-            LOG_ERR("Failed to start advertising: %d", err);
-            /* Continue anyway */
-        }
+        LOG_ERR("Failed to start advertising: %d", err);
+        /* Continue anyway */
     }
     
     /* Start NFC polling */

@@ -128,24 +128,25 @@ int ble_service_start_advertising(bool fast)
         return 0;
     }
 
-    struct bt_le_adv_param *param;
+    int err;
+    
     if (fast) {
-        static const struct bt_le_adv_param fast_param = BT_LE_ADV_PARAM_INIT(
-            BT_LE_ADV_OPT_CONNECTABLE | BT_LE_ADV_OPT_USE_NAME,
-            BT_GAP_ADV_FAST_INT_MIN_2,  /* 100ms */
-            BT_GAP_ADV_FAST_INT_MAX_2,  /* 150ms */
-            NULL);
-        param = (struct bt_le_adv_param *)&fast_param;
+        // Use standard connectable advertising
+        err = bt_le_adv_start(BT_LE_ADV_CONN, ad, ARRAY_SIZE(ad), NULL, 0);
     } else {
-        static const struct bt_le_adv_param slow_param = BT_LE_ADV_PARAM_INIT(
-            BT_LE_ADV_OPT_CONNECTABLE | BT_LE_ADV_OPT_USE_NAME,
-            BT_GAP_ADV_SLOW_INT_MIN,  /* 1s */
-            BT_GAP_ADV_SLOW_INT_MAX,  /* 2.5s */
-            NULL);
-        param = (struct bt_le_adv_param *)&slow_param;
+        // Create custom slow advertising parameters
+        static const struct bt_le_adv_param slow_adv_param = {
+            .id = BT_ID_DEFAULT,
+            .sid = 0,
+            .secondary_max_skip = 0,
+            .options = BT_LE_ADV_OPT_CONNECTABLE | BT_LE_ADV_OPT_USE_NAME,
+            .interval_min = BT_GAP_ADV_SLOW_INT_MIN,
+            .interval_max = BT_GAP_ADV_SLOW_INT_MAX,
+            .peer = NULL,
+        };
+        err = bt_le_adv_start(&slow_adv_param, ad, ARRAY_SIZE(ad), NULL, 0);
     }
 
-    int err = bt_le_adv_start(param, ad, ARRAY_SIZE(ad), NULL, 0);
     if (!err) {
         is_advertising = true;
         LOG_INF("Advertising started (%s mode)", fast ? "fast" : "slow");
