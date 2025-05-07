@@ -226,27 +226,39 @@ BT_CONN_CB_DEFINE(conn_callbacks) = {
 static void start_scan(void)
 {
     int err;
+    int retry_count = 0;
+    const int max_retries = 3;
 
     if (scanning) {
+        LOG_INF("Scan already active");
         return;
     }
 
-    // Configure scan parameters
-    struct bt_le_scan_param scan_param = {
-        .type = BT_LE_SCAN_TYPE_ACTIVE,
-        .interval = BLE_SCAN_INTERVAL,
-        .window = BLE_SCAN_WINDOW,
-        .options = BT_LE_SCAN_OPT_FILTER_DUPLICATE
-    };
+    while (retry_count < max_retries) {
+        // Configure scan parameters for better discovery
+        struct bt_le_scan_param scan_param = {
+            .type = BT_LE_SCAN_TYPE_ACTIVE,
+            .interval = BLE_SCAN_INTERVAL,
+            .window = BLE_SCAN_WINDOW,
+            .options = BT_LE_SCAN_OPT_FILTER_DUPLICATE
+        };
 
-    err = bt_le_scan_start(&scan_param, device_found);
-    if (err) {
-        LOG_ERR("Starting scanning failed (err %d)", err);
-        return;
+        err = bt_le_scan_start(&scan_param, device_found);
+        if (err == 0) {
+            scanning = true;
+            LOG_INF("Scanning started successfully");
+            return;
+        } else if (err == -EAGAIN) {
+            retry_count++;
+            LOG_WRN("Scan start failed with EAGAIN, retry %d/%d", retry_count, max_retries);
+            k_sleep(K_MSEC(1000 * retry_count));
+        } else {
+            LOG_ERR("Starting scanning failed (err %d)", err);
+            return;
+        }
     }
 
-    scanning = true;
-    LOG_INF("Scanning started");
+    LOG_ERR("Failed to start scan after %d retries", max_retries);
 }
 
 static void error_recovery(void)

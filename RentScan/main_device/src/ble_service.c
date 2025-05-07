@@ -30,7 +30,7 @@ static void send_response(void);
 static const struct bt_data ad[] = {
     BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
     BT_DATA(BT_DATA_NAME_COMPLETE, RENTSCAN_DEVICE_NAME, sizeof(RENTSCAN_DEVICE_NAME) - 1),
-    BT_DATA_BYTES(BT_DATA_UUID128_ALL, BT_UUID_128_ENCODE(0x18ee2ef5, 0x263d, 0x4559, 0x953c, 0xd66077c89ae6))
+    BT_DATA_BYTES(BT_DATA_UUID128_ALL, BT_UUID_RENTSCAN_VAL),
 };
 
 /* Service Declaration */
@@ -130,19 +130,17 @@ int ble_service_start_advertising(bool fast)
 
     struct bt_le_adv_param *param;
     if (fast) {
-        // Fast advertising parameters (100-150ms)
         static const struct bt_le_adv_param fast_param = BT_LE_ADV_PARAM_INIT(
             BT_LE_ADV_OPT_CONNECTABLE | BT_LE_ADV_OPT_USE_NAME,
-            0x00A0, /* 100ms */
-            0x00F0, /* 150ms */
+            BT_GAP_ADV_FAST_INT_MIN,  /* 20ms */
+            BT_GAP_ADV_FAST_INT_MAX,  /* 30ms */
             NULL);
         param = (struct bt_le_adv_param *)&fast_param;
     } else {
-        // Slow advertising parameters (1-1.2s)
         static const struct bt_le_adv_param slow_param = BT_LE_ADV_PARAM_INIT(
             BT_LE_ADV_OPT_CONNECTABLE | BT_LE_ADV_OPT_USE_NAME,
-            0x0640, /* 1s */
-            0x0780, /* 1.2s */
+            BT_GAP_ADV_SLOW_INT_MIN,  /* 1s */
+            BT_GAP_ADV_SLOW_INT_MAX,  /* 2.5s */
             NULL);
         param = (struct bt_le_adv_param *)&slow_param;
     }
@@ -151,6 +149,8 @@ int ble_service_start_advertising(bool fast)
     if (!err) {
         is_advertising = true;
         LOG_INF("Advertising started (%s mode)", fast ? "fast" : "slow");
+    } else {
+        LOG_ERR("Advertising failed to start (err %d)", err);
     }
     return err;
 }
