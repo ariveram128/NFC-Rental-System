@@ -5,21 +5,17 @@
 
 #include "nrf_fstorage.h"
 #include "nrf_fstorage_sd.h"
+#include <string.h>
 
-/* Define the global fstorage instance needed by storage_manager.c */
+/* Global fstorage instance */
 nrf_fstorage_t fstorage;
 
-/* Define the SoftDevice flash storage API instance */
-const struct nrf_fstorage_sd_api nrf_fstorage_sd = {
-    .p_name = "ZEPHYR_FLASH"
-};
-
-// Flash storage API implementation that uses Zephyr's flash API
+/* Flash storage API implementation that uses Zephyr's flash API */
 const nrf_fstorage_api_t nrf_fstorage_sd = {
-    .init  = NULL, // Will be initialized in nrf_fstorage_init
-    .read  = NULL, // Will be implemented in nrf_fstorage_read
-    .write = NULL, // Will be implemented in nrf_fstorage_write
-    .erase = NULL  // Will be implemented in nrf_fstorage_erase
+    .init = NULL,
+    .read = NULL,
+    .write = NULL,
+    .erase = NULL
 };
 
 /**

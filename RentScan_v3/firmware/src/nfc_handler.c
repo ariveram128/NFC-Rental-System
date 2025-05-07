@@ -7,6 +7,8 @@
  */
 
  #include <string.h>
+ #include <stdlib.h>  // For rand()
+ #include <stdio.h>   // For snprintf
  #include "nfc_handler.h"
  #include "nrf_log.h"
  #include "app_error.h"

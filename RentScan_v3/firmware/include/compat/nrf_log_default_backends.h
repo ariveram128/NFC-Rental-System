@@ -18,7 +18,7 @@ extern "C" {
 /**
  * @brief Initialize default log backends
  */
-static inline void NRF_LOG_DEFAULT_BACKENDS_INIT(void)
+void NRF_LOG_DEFAULT_BACKENDS_INIT(void)
 {
     /* In Zephyr, backends are configured at build time */
 }

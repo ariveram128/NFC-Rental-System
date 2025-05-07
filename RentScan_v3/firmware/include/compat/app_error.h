@@ -26,14 +26,15 @@ typedef uint32_t ret_code_t;
  */
 #define NRF_SUCCESS                    0
 #define NRF_ERROR_NULL                 1
-#define NRF_ERROR_BUSY                 2
-#define NRF_ERROR_INVALID_PARAM        3
+#define NRF_ERROR_BUSY                 1 
+#define NRF_ERROR_INVALID_PARAM        2
 #define NRF_ERROR_INVALID_STATE        4
 #define NRF_ERROR_NOT_FOUND            5
 #define NRF_ERROR_NOT_SUPPORTED        6
 #define NRF_ERROR_TIMEOUT              7
 #define NRF_ERROR_INVALID_LENGTH       8
-#define NRF_ERROR_INTERNAL             9
+#define NRF_ERROR_INTERNAL             3
+#define NRF_ERROR_NO_MEM               20
 
 /**
  * @brief Error handler function
@@ -69,6 +70,8 @@ static inline void app_error_handler(ret_code_t error_code, uint32_t line_num, c
             return LOCAL_ERR_CODE;                      \
         }                                               \
     } while (0)
+
+#define UNUSED(x) (void)(x)
 
 #ifdef __cplusplus
 }

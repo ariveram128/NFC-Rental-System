@@ -24,10 +24,10 @@ extern "C" {
  * @param p_default_config Default configuration (unused in Zephyr)
  * @return NRF_SUCCESS on successful initialization
  */
-static inline ret_code_t NRF_LOG_INIT(void *p_default_config)
+ret_code_t NRF_LOG_INIT(void *p_default_config)
 {
     /* No-op in Zephyr as initialization is done during the build */
-    return NRF_SUCCESS;
+    return 0;
 }
 
 /**
@@ -35,7 +35,7 @@ static inline ret_code_t NRF_LOG_INIT(void *p_default_config)
  *
  * @return True if there were pending log messages, false otherwise
  */
-static inline bool NRF_LOG_PROCESS(void)
+bool NRF_LOG_PROCESS(void)
 {
     /* In Zephyr, log processing is handled differently */
     return false;
@@ -44,7 +44,7 @@ static inline bool NRF_LOG_PROCESS(void)
 /**
  * @brief Flush log data
  */
-static inline void NRF_LOG_FLUSH(void)
+void NRF_LOG_FLUSH(void)
 {
     log_panic();
 }

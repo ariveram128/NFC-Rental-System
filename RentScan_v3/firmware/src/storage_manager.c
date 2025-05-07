@@ -33,13 +33,8 @@
  #define STORAGE_MAGIC_NUMBER     0xABCD1234
  #define STORAGE_VERSION          1
  
- // Fstorage instance
- NRF_FSTORAGE_DEF(nrf_fstorage_t fstorage) =
- {
-     .evt_handler = fstorage_evt_handler,
-     .start_addr = STORAGE_START_ADDR,
-     .end_addr   = STORAGE_START_ADDR + (STORAGE_PAGE_SIZE * STORAGE_NUM_PAGES),
- };
+ // Fstorage instance - defined in nrf_fstorage_impl.c
+ extern nrf_fstorage_t fstorage;
  
  // Flag indicating if storage operation is in progress
  static bool m_storage_busy = false;
