@@ -33,6 +33,7 @@ static void nfc_callback(void *context,
                         size_t data_length)
 {
     int err;
+    char item_id[16] = "001"; // Default item ID
     
     switch (event) {
     case NFC_T2T_EVENT_FIELD_ON:
@@ -44,7 +45,15 @@ static void nfc_callback(void *context,
         break;
 
     case NFC_T2T_EVENT_DATA_READ:
-        LOG_INF("NFC data read: ItemID: 001");        
+        LOG_INF("NFC data read: ItemID: %s", item_id);
+        
+        // Call the registered callback with the item ID
+        if (tag_callback) {
+            // Extract item ID from hardcoded value for demonstration
+            // In a real implementation, this would parse the NDEF record
+            uint8_t id_len = strlen(item_id);
+            tag_callback((const uint8_t *)item_id, id_len, NULL, 0);
+        }
         break;
 
     default:

@@ -36,6 +36,36 @@ static void ble_message_handler(const rentscan_msg_t *msg)
     /* Copy the message to our buffer */
     memcpy(&current_msg, msg, sizeof(rentscan_msg_t));
     
+    /* Process received tag data */
+    if (msg->cmd == CMD_STATUS_REQ && msg->tag_id_len > 0) {
+        char tag_id_str[MAX_TAG_ID_LEN + 1];
+        memcpy(tag_id_str, msg->tag_id, msg->tag_id_len);
+        tag_id_str[msg->tag_id_len] = '\0';
+        
+        LOG_INF("Received tag data from main device: ItemID: %s", tag_id_str);
+        
+        /* Check if item is already rented */
+        rental_info_t *existing = NULL;
+        char item_id[MAX_TAG_ID_LEN + 1];
+        
+        /* Convert binary tag ID to string for lookup */
+        snprintf(item_id, sizeof(item_id), "%.*s", msg->tag_id_len, msg->tag_id);
+        
+        /* Find rental */
+        rentscan_status_t status;
+        if (gateway_service_get_rental_status(item_id, &status) == 0) {
+            if (status == STATUS_RENTED) {
+                /* Item is rented, end the rental */
+                LOG_INF("Item %s is currently rented. Ending rental.", item_id);
+                gateway_service_end_rental(item_id);
+            } else {
+                /* Item is not rented, start a new rental */
+                LOG_INF("Item %s is available. Starting rental.", item_id);
+                gateway_service_start_rental(item_id, "auto_user", 300); /* 5 minute rental */
+            }
+        }
+    }
+    
     /* Signal that we have a message ready */
     message_ready = true;
     

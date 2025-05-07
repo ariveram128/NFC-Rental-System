@@ -95,13 +95,39 @@ static void rental_status_changed_handler(const rentscan_msg_t *msg)
  */
 static void nfc_process_work_handler(struct k_work *work)
 {
+    LOG_INF("Processing NFC tag with ID: %.*s", tag_id_len, tag_id_buf);
+    
+    // Create a message to send to the gateway
+    rentscan_msg_t msg;
+    memset(&msg, 0, sizeof(msg));
+    
+    // Set message fields
+    msg.cmd = CMD_STATUS_REQ; // Request status to check if item is rented
+    msg.tag_id_len = tag_id_len;
+    memcpy(msg.tag_id, tag_id_buf, tag_id_len);
+    msg.timestamp = k_uptime_get_32() / 1000; // Convert to seconds
+    
+    // Only send if we have a BLE connection
+    if (ble_service_is_connected()) {
+        int err = ble_service_send_message(&msg);
+        if (err) {
+            LOG_ERR("Failed to send tag data via BLE: %d", err);
+        } else {
+            LOG_INF("Tag data sent to gateway");
+        }
+    } else {
+        LOG_WRN("BLE not connected, can't send tag data");
+    }
+    
+    // Process the tag locally
     int err = rental_manager_process_tag(tag_id_buf, tag_id_len,
                                        tag_data_buf, tag_data_len);
     if (err) {
         LOG_ERR("Failed to process tag: %d", err);
-        tag_processing = false;
     }
-    /* Note: tag_processing will be cleared in rental_status_changed_handler */
+    
+    // Clear the processing flag
+    tag_processing = false;
 }
 
 /**
