@@ -24,8 +24,8 @@
  #include <zephyr/kernel.h>
  
  // BLE related includes
- #include "ble_advdata.h"
- #include "ble_advertising.h"
+ // #include "ble_advdata.h" // Old SDK, comment out
+ // #include "ble_advertising.h" // Old SDK, comment out
  #include "ble_conn_params.h"
  #include "ble_hci.h"
  #include "ble_srv_common.h"
@@ -73,12 +73,12 @@
  // BLE related variables
  NRF_BLE_GATT_DEF(m_gatt);                                          /**< GATT module instance. */
  NRF_BLE_QWR_DEF(m_qwr);                                            /**< Context for the Queued Write module. */
- BLE_ADVERTISING_DEF(m_advertising);                                /**< Advertising module instance. */
+ // BLE_ADVERTISING_DEF(m_advertising);                                /**< Advertising module instance. */ // Old SDK, comment out
  BLE_RENTAL_SERVICE_DEF(m_rental_service);                          /**< Rental Service instance. */
  
  static uint16_t m_conn_handle = BLE_CONN_HANDLE_INVALID;           /**< Handle of the current connection. */
- static uint8_t m_adv_handle = BLE_GAP_ADV_SET_HANDLE_NOT_SET;      /**< Advertising handle used to identify an advertising set. */
- static uint8_t m_enc_advdata[BLE_GAP_ADV_SET_DATA_SIZE_MAX];       /**< Buffer for storing an encoded advertising set. */
+ // static uint8_t m_adv_handle = BLE_GAP_ADV_SET_HANDLE_NOT_SET;      /**< Advertising handle used to identify an advertising set. */ // Old SDK, comment out
+ // static uint8_t m_enc_advdata[BLE_GAP_ADV_SET_DATA_SIZE_MAX];       /**< Buffer for storing an encoded advertising set. */ // Old SDK, comment out
  
  // NFC related variables
  static uint8_t m_ndef_msg_buf[NFC_NDEF_MSG_BUF_SIZE];              /**< Buffer for NDEF message. */
@@ -97,10 +97,10 @@
  static void ble_stack_init(void);
  static void gap_params_init(void);
  static void gatt_init(void);
- static void advertising_init(void);
+ // static void advertising_init(void); // Old SDK, comment out
  static void services_init(void);
  static void conn_params_init(void);
- static void advertising_start(void);
+ // static void advertising_start(void); // Old SDK, comment out
  static void nfc_init(void);
  static void nfc_callback(void * p_context, nfc_t4t_event_t event, const uint8_t * p_data, size_t data_length);
  static void scan_timer_handler(void * p_context);
@@ -206,32 +206,6 @@
      APP_ERROR_CHECK(err_code);
  }
  
- /**@brief Function for initializing the Advertising functionality. */
- static void advertising_init(void)
- {
-     ret_code_t             err_code;
-     ble_advertising_init_t init;
- 
-     memset(&init, 0, sizeof(init));
- 
-     init.advdata.name_type               = BLE_ADVDATA_FULL_NAME;
-     init.advdata.include_appearance      = true;
-     init.advdata.flags                   = BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE;
-     init.advdata.uuids_complete.uuid_cnt = 0;
-     init.advdata.uuids_complete.p_uuids  = NULL;
- 
-     init.config.ble_adv_fast_enabled  = true;
-     init.config.ble_adv_fast_interval = APP_ADV_INTERVAL;
-     init.config.ble_adv_fast_timeout  = APP_ADV_DURATION;
- 
-     init.evt_handler = NULL;
- 
-     err_code = ble_advertising_init(&m_advertising, &init);
-     APP_ERROR_CHECK(err_code);
- 
-     ble_advertising_conn_cfg_tag_set(&m_advertising, APP_BLE_CONN_CFG_TAG);
- }
- 
  /**@brief Function for initializing services that will be used by the application. */
  static void services_init(void)
  {
@@ -281,13 +255,6 @@
      cp_init.error_handler                  = NULL;
  
      err_code = ble_conn_params_init(&cp_init);
-     APP_ERROR_CHECK(err_code);
- }
- 
- /**@brief Function for starting advertising. */
- static void advertising_start(void)
- {
-     ret_code_t err_code = ble_advertising_start(&m_advertising, BLE_ADV_MODE_FAST);
      APP_ERROR_CHECK(err_code);
  }
  
@@ -521,7 +488,6 @@
      gap_params_init();
      gatt_init();
      services_init();
-     advertising_init();
      conn_params_init();
      
      // Initialize NFC
@@ -531,7 +497,7 @@
      storage_manager_init();
      
      // Start execution
-     advertising_start();
+     // advertising_start(); // Old SDK, comment out
      
      // Start timer for NFC scanning
      app_timer_start(m_scan_timer_id, NFC_SCAN_INTERVAL, NULL);

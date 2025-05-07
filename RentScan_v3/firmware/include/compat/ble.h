@@ -21,6 +21,15 @@ extern "C" {
 #endif
 
 /**
+ * @brief GATT characteristic handles
+ */
+typedef struct {
+    uint16_t value_handle;   /**< Value handle */
+    uint16_t cccd_handle;    /**< CCCD handle */
+    uint16_t sccd_handle;    /**< SCCD handle */
+} ble_gatts_char_handles_t;
+
+/**
  * @brief Connection handle type
  */
 typedef uint16_t ble_conn_handle_t;
@@ -117,7 +126,7 @@ typedef struct {
  * @brief BLE GATTS event types
  */
 typedef enum {
-    BLE_GATTS_EVT_WRITE = 1,    /**< Write operation performed. */
+    BLE_GATTS_EVT_WRITE = 2,    /**< Write operation performed. Changed to 2 to avoid conflict */
 } ble_gatts_evt_type_t;
 
 /**
@@ -126,7 +135,9 @@ typedef enum {
 typedef struct {
     union {
         ble_gatts_evt_write_t write;  /**< Write event parameters. */
+        // Add other GATTS event params here if needed
     } params;                         /**< Event parameter union. */
+    uint16_t conn_handle;             /**< Connection handle for GATTS events. */
 } ble_gatts_evt_t;
 
 /**

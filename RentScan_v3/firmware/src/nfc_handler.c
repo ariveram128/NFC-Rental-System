@@ -19,7 +19,7 @@
  
  // Buffer for NDEF message
  static uint8_t m_ndef_buffer[NFC_HANDLER_NDEF_BUFFER_SIZE];
- static uint32_t m_ndef_buffer_len;
+ // static uint32_t m_ndef_buffer_len; // Unused
  
  // Current tag ID
  static uint8_t m_current_tag_id[NFC_TAG_ID_MAX_LENGTH];

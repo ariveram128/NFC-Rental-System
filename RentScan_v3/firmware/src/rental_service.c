@@ -25,7 +25,7 @@
   */
  static void on_connect(ble_rental_service_t * p_rental_service, ble_evt_t const * p_ble_evt)
  {
-     p_rental_service->conn_handle = p_ble_evt->evt.gap_evt.params.connected.conn_handle;
+     p_rental_service->conn_handle = p_ble_evt->evt.gap_evt.connected.conn_handle;
  }
  
  /**@brief Function for handling the Disconnect event.
@@ -60,7 +60,7 @@
              // Call the write handler if it's registered
              if (p_rental_service->write_handler != NULL)
              {
-                 p_rental_service->write_handler(p_ble_evt->evt.gatts_evt.params.write.conn_handle, p_rental_service, &received_item);
+                 p_rental_service->write_handler(p_ble_evt->evt.gatts_evt.conn_handle, p_rental_service, &received_item);
              }
          }
      }
@@ -95,7 +95,7 @@
   * @param[in]   p_ble_evt   Event received from the BLE stack.
   * @param[in]   p_context   Rental Service structure.
   */
- static void on_ble_evt(ble_evt_t const * p_ble_evt, void * p_context)
+ static void __attribute__((__unused__)) on_ble_evt(ble_evt_t const * p_ble_evt, void * p_context)
  {
      ble_rental_service_t * p_rental_service = (ble_rental_service_t *)p_context;
      

@@ -16,15 +16,6 @@ extern "C" {
 #endif
 
 /**
- * @brief GATT characteristic handles
- */
-typedef struct {
-    uint16_t value_handle;   /**< Value handle */
-    uint16_t cccd_handle;    /**< CCCD handle */
-    uint16_t sccd_handle;    /**< SCCD handle */
-} ble_gatts_char_handles_t;
-
-/**
  * @brief Check if notification is enabled in CCCD
  *
  * @param[in] p_data Pointer to the CCCD value
