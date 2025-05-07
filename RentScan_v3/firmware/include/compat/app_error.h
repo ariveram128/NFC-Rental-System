@@ -1,55 +1,77 @@
 /**
  * @file app_error.h
- * @brief Compatibility layer for app_error.h from nRF SDK
+ * @brief Compatibility layer for Nordic SDK error handling
+ *
+ * This file provides compatibility with Nordic SDK error handling APIs
+ * when using Zephyr-based nRF Connect SDK
  */
 
-#ifndef APP_ERROR_COMPAT_H__
-#define APP_ERROR_COMPAT_H__
+#ifndef APP_ERROR_H__
+#define APP_ERROR_H__
 
-#include <zephyr/kernel.h>
-#include <zephyr/sys/printk.h>
+#include <kernel.h>
+#include <sys/printk.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /**
- * @brief Error type
+ * @brief Return code type
  */
 typedef uint32_t ret_code_t;
 
 /**
  * @brief Success code
  */
-#define NRF_SUCCESS 0
+#define NRF_SUCCESS                    0
+#define NRF_ERROR_NULL                 1
+#define NRF_ERROR_BUSY                 2
+#define NRF_ERROR_INVALID_PARAM        3
+#define NRF_ERROR_INVALID_STATE        4
+#define NRF_ERROR_NOT_FOUND            5
+#define NRF_ERROR_NOT_SUPPORTED        6
+#define NRF_ERROR_TIMEOUT              7
+#define NRF_ERROR_INVALID_LENGTH       8
+#define NRF_ERROR_INTERNAL             9
 
 /**
- * @brief Error codes
+ * @brief Error handler function
  */
-#define NRF_ERROR_BASE_NUM  0x0
-#define NRF_ERROR_SDM_BASE_NUM  0x1000
-#define NRF_ERROR_SOC_BASE_NUM  0x2000
-#define NRF_ERROR_STK_BASE_NUM  0x3000
-
-#define NRF_ERROR_INVALID_PARAM   (NRF_ERROR_BASE_NUM + 1)
-#define NRF_ERROR_INVALID_STATE   (NRF_ERROR_BASE_NUM + 2)
-#define NRF_ERROR_NOT_FOUND       (NRF_ERROR_BASE_NUM + 3)
-#define NRF_ERROR_NO_MEM          (NRF_ERROR_BASE_NUM + 4)
-#define NRF_ERROR_INTERNAL        (NRF_ERROR_BASE_NUM + 5)
-#define NRF_ERROR_BUSY            (NRF_ERROR_BASE_NUM + 6)
-#define NRF_ERROR_TIMEOUT         (NRF_ERROR_BASE_NUM + 7)
-#define NRF_ERROR_NULL            (NRF_ERROR_BASE_NUM + 8)
+static inline void app_error_handler(ret_code_t error_code, uint32_t line_num, const uint8_t * p_file_name)
+{
+    printk("ERROR %d [%s:%d]\n", error_code, p_file_name, line_num);
+    k_panic();
+}
 
 /**
- * @brief Check for error and handle it
+ * @brief Error check macro
  */
-#define APP_ERROR_CHECK(err_code) \
-    do { \
-        if ((err_code) != NRF_SUCCESS) { \
-            printk("Error %d at %s:%d\n", (err_code), __FILE__, __LINE__); \
-            k_panic(); \
-        } \
+#define APP_ERROR_CHECK(ERR_CODE)                       \
+    do                                                  \
+    {                                                   \
+        const uint32_t LOCAL_ERR_CODE = (ERR_CODE);     \
+        if (LOCAL_ERR_CODE != NRF_SUCCESS)              \
+        {                                               \
+            app_error_handler(LOCAL_ERR_CODE, __LINE__, (const uint8_t*) __FILE__); \
+        }                                               \
     } while (0)
 
 /**
- * @brief Handle error with handler function
+ * @brief Error check with return macro
  */
-#define APP_ERROR_HANDLER(err_code) APP_ERROR_CHECK(err_code)
+#define VERIFY_SUCCESS(ERR_CODE)                        \
+    do                                                  \
+    {                                                   \
+        const uint32_t LOCAL_ERR_CODE = (ERR_CODE);     \
+        if (LOCAL_ERR_CODE != NRF_SUCCESS)              \
+        {                                               \
+            return LOCAL_ERR_CODE;                      \
+        }                                               \
+    } while (0)
 
-#endif // APP_ERROR_COMPAT_H__
+#ifdef __cplusplus
+}
+#endif
+
+#endif // APP_ERROR_H__

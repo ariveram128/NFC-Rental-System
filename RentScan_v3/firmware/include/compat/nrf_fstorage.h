@@ -1,126 +1,122 @@
 /**
  * @file nrf_fstorage.h
- * @brief Compatibility layer for nrf_fstorage.h from nRF SDK
+ * @brief Compatibility layer for Nordic SDK flash storage module
+ *
+ * This file provides compatibility with Nordic SDK flash storage APIs
+ * when using Zephyr-based nRF Connect SDK
  */
 
-#ifndef NRF_FSTORAGE_COMPAT_H__
-#define NRF_FSTORAGE_COMPAT_H__
+#ifndef NRF_FSTORAGE_H__
+#define NRF_FSTORAGE_H__
 
-#include <zephyr/kernel.h>
-/* Fix includes for Zephyr flash */
-#include <zephyr/storage/flash_map.h>
-#include <zephyr/fs/fs.h>
-#include <zephyr/device.h>
-#include <zephyr/drivers/flash.h>
-#include "app_error.h"
+#include <stdint.h>
+#include <stdbool.h>
+#include <kernel.h>
+#include <storage/flash_map.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /**
- * @brief Flash storage event types
+ * @brief Flash operation success code
  */
-typedef enum {
-    NRF_FSTORAGE_EVT_READ_COMPLETE,
-    NRF_FSTORAGE_EVT_WRITE_COMPLETE,
-    NRF_FSTORAGE_EVT_ERASE_COMPLETE,
-} nrf_fstorage_evt_id_t;
+#define NRF_SUCCESS              0
 
 /**
- * @brief Flash storage event
+ * @brief Error code for busy state
  */
-typedef struct {
-    nrf_fstorage_evt_id_t id;
-    uint32_t addr;
-    uint32_t len;
-    void * p_param;
-    ret_code_t result;  /* Added result field needed by storage_manager.c */
-} nrf_fstorage_evt_t;
+#define NRF_ERROR_BUSY           1
 
 /**
- * @brief Flash storage callback
+ * @brief Error code for invalid parameters
+ */
+#define NRF_ERROR_INVALID_PARAM  2
+
+/**
+ * @brief Generic error code
+ */
+#define NRF_ERROR_INTERNAL       3
+
+/**
+ * @brief Return code type
+ */
+typedef uint32_t ret_code_t;
+
+/**
+ * @brief Forward declaration of fstorage API type
+ */
+typedef struct nrf_fstorage_api_s nrf_fstorage_api_t;
+
+/**
+ * @brief Forward declaration of fstorage event type
+ */
+typedef struct nrf_fstorage_evt_s nrf_fstorage_evt_t;
+
+/**
+ * @brief Fstorage event handler function type
  */
 typedef void (*nrf_fstorage_evt_handler_t)(nrf_fstorage_evt_t * p_evt);
 
 /**
- * @brief Flash storage instance
+ * @brief Fstorage instance
  */
 typedef struct {
-    uint32_t start_addr;
-    uint32_t end_addr;
-    void * p_api;
-    nrf_fstorage_evt_handler_t evt_handler;
+    nrf_fstorage_evt_handler_t evt_handler;  /**< Event handler. */
+    uint32_t start_addr;                     /**< Start address of the flash area. */
+    uint32_t end_addr;                       /**< End address of the flash area. */
+    const nrf_fstorage_api_t * p_api;        /**< API implementation. */
+    void * p_flash_info;                     /**< Flash-specific information. */
 } nrf_fstorage_t;
 
-/* Define the NRF_FSTORAGE_DEF macro needed by storage_manager.c */
-#define NRF_FSTORAGE_DEF(name) nrf_fstorage_t name
-
-/* SoftDevice flash storage API definition - 
-   moved from nrf_fstorage_sd.h to simplify */
-struct nrf_fstorage_sd_api {
-    const char * p_name;
+/**
+ * @brief Fstorage event
+ */
+struct nrf_fstorage_evt_s {
+    nrf_fstorage_t * p_fstorage;          /**< Pointer to the fstorage instance. */
+    uint32_t addr;                        /**< Address at which the operation was performed. */
+    uint32_t len;                         /**< Length of the operation. */
+    ret_code_t result;                    /**< Result of the operation. */
+    void * p_param;                       /**< User-defined parameter passed to the event handler. */
 };
-extern const struct nrf_fstorage_sd_api nrf_fstorage_sd;
-
-/* Declare a global fstorage instance that will be accessed 
-   in storage_manager.c */
-extern nrf_fstorage_t fstorage;
 
 /**
- * @brief Initialize flash storage
+ * @brief Fstorage API structure
  */
-static inline ret_code_t nrf_fstorage_init(nrf_fstorage_t * p_fs, void * p_api, void * p_param)
-{
-    if (p_fs == NULL) {
-        return NRF_ERROR_NULL;
-    }
-    
-    /* In Zephyr, we would initialize flash storage differently
-     * This is a placeholder - actual implementation would use Zephyr's flash API
-     */
-    return NRF_SUCCESS;
-}
+struct nrf_fstorage_api_s {
+    ret_code_t (*init)   (nrf_fstorage_t * p_fs, void * p_param);
+    ret_code_t (*read)   (nrf_fstorage_t * p_fs, uint32_t src, void * p_dest, uint32_t len);
+    ret_code_t (*write)  (nrf_fstorage_t * p_fs, uint32_t dest, void const * p_src, uint32_t len, void * p_param);
+    ret_code_t (*erase)  (nrf_fstorage_t * p_fs, uint32_t page_addr, uint32_t len, void * p_param);
+};
+
+/**
+ * @brief Fstorage instance definition macro
+ */
+#define NRF_FSTORAGE_DEF(_name) nrf_fstorage_t _name
+
+/**
+ * @brief Initialize a flash storage instance
+ */
+ret_code_t nrf_fstorage_init(nrf_fstorage_t * p_fs, const nrf_fstorage_api_t * p_api, void * p_param);
 
 /**
  * @brief Read data from flash
  */
-static inline ret_code_t nrf_fstorage_read(nrf_fstorage_t * p_fs, uint32_t addr, void * p_dest, uint32_t len)
-{
-    if (p_fs == NULL || p_dest == NULL || len == 0) {
-        return NRF_ERROR_NULL;
-    }
-    
-    /* In Zephyr, we would use the flash_area_read API
-     * This is a placeholder - actual implementation would use Zephyr's flash API
-     */
-    return NRF_SUCCESS;
-}
+ret_code_t nrf_fstorage_read(nrf_fstorage_t * p_fs, uint32_t src, void * p_dest, uint32_t len);
 
 /**
  * @brief Write data to flash
  */
-static inline ret_code_t nrf_fstorage_write(nrf_fstorage_t * p_fs, uint32_t addr, void const * p_src, uint32_t len, void * p_param)
-{
-    if (p_fs == NULL || p_src == NULL || len == 0) {
-        return NRF_ERROR_NULL;
-    }
-    
-    /* In Zephyr, we would use the flash_area_write API
-     * This is a placeholder - actual implementation would use Zephyr's flash API
-     */
-    return NRF_SUCCESS;
-}
+ret_code_t nrf_fstorage_write(nrf_fstorage_t * p_fs, uint32_t dest, void const * p_src, uint32_t len, void * p_param);
 
 /**
- * @brief Erase flash page
+ * @brief Erase flash pages
  */
-static inline ret_code_t nrf_fstorage_erase(nrf_fstorage_t * p_fs, uint32_t addr, uint32_t len, void * p_param)
-{
-    if (p_fs == NULL || len == 0) {
-        return NRF_ERROR_NULL;
-    }
-    
-    /* In Zephyr, we would use the flash_area_erase API
-     * This is a placeholder - actual implementation would use Zephyr's flash API
-     */
-    return NRF_SUCCESS;
-}
+ret_code_t nrf_fstorage_erase(nrf_fstorage_t * p_fs, uint32_t page_addr, uint32_t len, void * p_param);
 
-#endif // NRF_FSTORAGE_COMPAT_H__
+#ifdef __cplusplus
+}
+#endif
+
+#endif // NRF_FSTORAGE_H__

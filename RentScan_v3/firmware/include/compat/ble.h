@@ -1,123 +1,229 @@
 /**
  * @file ble.h
- * @brief Compatibility layer for ble.h from nRF SDK
+ * @brief Compatibility layer for Nordic SDK BLE API
+ *
+ * This file provides compatibility with Nordic SDK BLE APIs
+ * when using Zephyr-based nRF Connect SDK
  */
 
-#ifndef BLE_COMPAT_H__
-#define BLE_COMPAT_H__
+#ifndef BLE_H__
+#define BLE_H__
 
-#include <zephyr/kernel.h>
-#include <zephyr/bluetooth/bluetooth.h>
-#include <zephyr/bluetooth/uuid.h>
-#include <zephyr/bluetooth/gatt.h>
-#include <zephyr/bluetooth/conn.h>
-#include "app_error.h"
+#include <stdint.h>
+#include <string.h>
+#include <bluetooth/bluetooth.h>
+#include <bluetooth/conn.h>
+#include <bluetooth/gatt.h>
+#include <bluetooth/uuid.h>
 
-/* Bluetooth addresses */
-typedef bt_addr_le_t ble_gap_addr_t;
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-/* Connection handles */
+/**
+ * @brief Connection handle type
+ */
 typedef uint16_t ble_conn_handle_t;
-#define BLE_CONN_HANDLE_INVALID 0xFFFF
 
-/* Characteristic properties */
-#define BLE_GATT_CHAR_PROP_BROADCAST       0x01
-#define BLE_GATT_CHAR_PROP_READ            0x02
-#define BLE_GATT_CHAR_PROP_WRITE_WO_RESP   0x04
-#define BLE_GATT_CHAR_PROP_WRITE           0x08
-#define BLE_GATT_CHAR_PROP_NOTIFY          0x10
-#define BLE_GATT_CHAR_PROP_INDICATE        0x20
-#define BLE_GATT_CHAR_PROP_AUTH_SIGNED_WR  0x40
-#define BLE_GATT_CHAR_PROP_EXT_PROP        0x80
+/**
+ * @brief Invalid connection handle value
+ */
+#define BLE_CONN_HANDLE_INVALID     0xFFFF
 
-/* BLE events */
+/**
+ * @brief Security modes
+ */
+#define SEC_OPEN                    0  /**< Open link. */
+#define SEC_JUST_WORKS              1  /**< Just Works pairing. */
+#define SEC_MITM                    2  /**< MITM protected pairing. */
+
+/**
+ * @brief BLE UUID type
+ */
+typedef struct {
+    uint16_t    uuid;       /**< 16-bit UUID value or octets. */
+    uint8_t     type;       /**< UUID type, see @ref BLE_UUID_TYPES. */
+} ble_uuid_t;
+
+/**
+ * @brief 128-bit UUID values
+ */
+typedef struct {
+    uint8_t uuid128[16]; /**< 128-bit UUID value. */
+} ble_uuid128_t;
+
+/**
+ * @brief GATT characteristic properties
+ */
+typedef struct {
+    uint8_t broadcast      : 1; /**< Broadcasting of value permitted. */
+    uint8_t read           : 1; /**< Reading value permitted. */
+    uint8_t write_wo_resp  : 1; /**< Writing value with Write Command permitted. */
+    uint8_t write          : 1; /**< Writing value with Write Request permitted. */
+    uint8_t notify         : 1; /**< Notications of value permitted. */
+    uint8_t indicate       : 1; /**< Indications of value permitted. */
+    uint8_t auth_signed_wr : 1; /**< Authenticated signed writes permitted. */
+} ble_gatt_char_props_t;
+
+/**
+ * @brief BLE GATTS service types
+ */
+#define BLE_GATTS_SRVC_TYPE_PRIMARY  0  /**< Primary Service. */
+#define BLE_GATTS_SRVC_TYPE_SECONDARY 1 /**< Secondary Service. */
+
+/**
+ * @brief BLE GATTS write event
+ */
+typedef struct {
+    uint16_t handle;   /**< Attribute handle. */
+    uint16_t offset;   /**< Offset in bytes to write from. */
+    uint16_t len;      /**< Length in bytes to write. */
+    uint8_t  *data;    /**< Data to write. */
+} ble_gatts_evt_write_t;
+
+/**
+ * @brief BLE GATTS HVX types
+ */
+#define BLE_GATT_HVX_NOTIFICATION    1  /**< Notification. */
+#define BLE_GATT_HVX_INDICATION      2  /**< Indication. */
+
+/**
+ * @brief BLE GATTS HVX parameters
+ */
+typedef struct {
+    uint16_t handle;   /**< Attribute handle. */
+    uint8_t  type;     /**< Notification or Indication, see @ref BLE_GATT_HVX_TYPES. */
+    uint16_t offset;   /**< Offset in bytes for the value. */
+    uint16_t *p_len;   /**< Length in bytes of the value. */
+    uint8_t  *p_data;  /**< Data to be written. */
+} ble_gatts_hvx_params_t;
+
+/**
+ * @brief BLE characteristic add parameters
+ */
+typedef struct {
+    uint16_t                    uuid;           /**< UUID of the characteristic. */
+    uint8_t                     uuid_type;      /**< UUID type. */
+    uint16_t                    max_len;        /**< Maximum length of the characteristic value. */
+    uint16_t                    init_len;       /**< Initial length of the characteristic value. */
+    uint8_t                    *p_init_value;   /**< Initial value of the characteristic */
+    ble_gatt_char_props_t       char_props;     /**< Characteristic properties. */
+    uint8_t                     read_access;    /**< Read access level. */
+    uint8_t                     write_access;   /**< Write access level. */
+    uint8_t                     cccd_write_access; /**< CCCD write access level. */
+} ble_add_char_params_t;
+
+/**
+ * @brief BLE GATTS event types
+ */
 typedef enum {
-    BLE_GAP_EVT_CONNECTED,
-    BLE_GAP_EVT_DISCONNECTED,
-    BLE_GAP_EVT_CONN_PARAM_UPDATE,
-    BLE_GATTC_EVT_WRITE_RSP,
-    BLE_GATTS_EVT_WRITE,
-    BLE_GATTS_EVT_SYS_ATTR_MISSING,
-} ble_evt_type_t;
+    BLE_GATTS_EVT_WRITE = 1,    /**< Write operation performed. */
+} ble_gatts_evt_type_t;
 
-/* BLE parameter types */
+/**
+ * @brief BLE GATTS event parameters
+ */
 typedef struct {
-    uint8_t uuid_type;
-    uint16_t uuid;
-    uint8_t char_props;
-} ble_gatts_char_md_t;
+    union {
+        ble_gatts_evt_write_t write;  /**< Write event parameters. */
+    } params;                         /**< Event parameter union. */
+} ble_gatts_evt_t;
 
-typedef struct {
-    uint8_t read_perm;
-    uint8_t write_perm;
-    uint8_t vlen:1;
-} ble_gatts_attr_md_t;
+/**
+ * @brief BLE GAP event types
+ */
+typedef enum {
+    BLE_GAP_EVT_CONNECTED = 1,       /**< Connection established. */
+    BLE_GAP_EVT_DISCONNECTED         /**< Connection terminated. */
+} ble_gap_evt_type_t;
 
+/**
+ * @brief BLE GAP event parameters
+ */
 typedef struct {
-    const uint8_t *p_value;
-    uint16_t len;
-    uint16_t init_len;
-    uint16_t max_len;
-    uint8_t *p_uuid;
-} ble_gatts_attr_t;
+    union {
+        struct {
+            uint16_t conn_handle;    /**< Connection handle */
+        } connected;
+        struct {
+            uint16_t conn_handle;    /**< Connection handle */
+            uint8_t  reason;         /**< Disconnection reason */
+        } disconnected;
+    };
+} ble_gap_evt_t;
 
+/**
+ * @brief BLE event header
+ */
 typedef struct {
-    uint16_t handle;
-    uint16_t cccd_handle;
-    uint16_t value_handle;
-} ble_gatts_char_handles_t;
+    uint16_t evt_id;  /**< Event ID. */
+} ble_evt_hdr_t;
 
-/* BLE event structure */
+/**
+ * @brief BLE event structure
+ */
 typedef struct {
-    uint16_t conn_handle;
-    ble_evt_type_t event_type;
+    ble_evt_hdr_t header;            /**< Event header. */
+    union {
+        ble_gap_evt_t   gap_evt;     /**< GAP event parameters. */
+        ble_gatts_evt_t gatts_evt;   /**< GATTS event parameters. */
+    } evt;                           /**< Event parameters. */
 } ble_evt_t;
 
 /**
- * @brief Initialize the BLE stack
+ * @brief Compatibility mapping for characteristic_add
  */
-static inline ret_code_t ble_stack_init(void)
+static inline ret_code_t characteristic_add(uint16_t service_handle,
+                                            ble_add_char_params_t * p_char_params,
+                                            ble_gatts_char_handles_t * p_handles)
 {
-    /* In Zephyr, BT stack initialization is done by bt_enable() */
-    /* This would be implemented using Zephyr BT API */
-    return NRF_SUCCESS;
-}
-
-/* Characteristic definition */
-static inline ret_code_t sd_ble_gatts_characteristic_add(
-                                        uint16_t                   service_handle,
-                                        ble_gatts_char_md_t const *p_char_md,
-                                        ble_gatts_attr_t const    *p_attr,
-                                        ble_gatts_char_handles_t  *p_handles)
-{
-    /* Would be implemented using bt_gatt_characteristic_add() */
-    return NRF_SUCCESS;
-}
-
-/* Notification/Indication */
-static inline ret_code_t sd_ble_gatts_hvx(
-                                uint16_t conn_handle, 
-                                void *p_hvx_params)
-{
-    /* Would be implemented using bt_gatt_notify() or bt_gatt_indicate() */
-    return NRF_SUCCESS;
+    /* Implementation would be provided in an accompanying .c file */
+    /* For now, just return success */
+    return 0;
 }
 
 /**
- * @brief BLE advertising parameters
+ * @brief Dummy implementation for service UUID add
  */
-typedef struct {
-    bool connectable;
-    uint16_t interval;
-} ble_adv_params_t;
-
-/**
- * @brief Start advertising
- */
-static inline ret_code_t ble_advertising_start(ble_adv_params_t const *p_adv_params)
+static inline ret_code_t sd_ble_uuid_vs_add(ble_uuid128_t const *p_vs_uuid, uint8_t *p_uuid_type)
 {
-    /* Would be implemented using bt_le_adv_start() */
-    return NRF_SUCCESS;
+    /* Implementation would be provided in an accompanying .c file */
+    /* For now, just return success */
+    *p_uuid_type = 3; // Dummy value
+    return 0;
 }
 
-#endif // BLE_COMPAT_H__
+/**
+ * @brief Dummy implementation for service add
+ */
+static inline ret_code_t sd_ble_gatts_service_add(uint8_t type, ble_uuid_t const *p_uuid, uint16_t *p_handle)
+{
+    /* Implementation would be provided in an accompanying .c file */
+    /* For now, just return success */
+    *p_handle = 1; // Dummy value
+    return 0;
+}
+
+/**
+ * @brief Dummy implementation for system attributes set
+ */
+static inline ret_code_t sd_ble_gatts_sys_attr_set(uint16_t conn_handle, uint8_t const *p_sys_attr_data, uint16_t len, uint32_t flags)
+{
+    /* Implementation would be provided in an accompanying .c file */
+    /* For now, just return success */
+    return 0;
+}
+
+/**
+ * @brief Check if notifications are enabled
+ */
+static inline bool ble_srv_is_notification_enabled(uint8_t const *p_data)
+{
+    return (p_data[0] & 0x01);
+}
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif // BLE_H__
