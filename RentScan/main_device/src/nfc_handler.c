@@ -24,7 +24,7 @@ static uint32_t len;
 
 /* Default NDEF message */
 static const uint8_t en_code[] = {'e', 'n'};
-static const uint8_t en_payload[] = "RentScan Ready";
+static const uint8_t en_payload[] = "ItemID: 001";
 
 /* NFC callback from T2T lib */
 static void nfc_callback(void *context,
@@ -44,10 +44,7 @@ static void nfc_callback(void *context,
         break;
 
     case NFC_T2T_EVENT_DATA_READ:
-        if (tag_callback && data) {
-            // For now, use first 8 bytes as tag ID
-            tag_callback(data, 8, data + 8, data_length - 8);
-        }
+        LOG_INF("NFC data read: ItemID: 001");        
         break;
 
     default:
