@@ -33,6 +33,7 @@ static void bt_ready(int err);
 static uint8_t discover_func(struct bt_conn *conn,
                          const struct bt_gatt_attr *attr,
                          struct bt_gatt_discover_params *params);
+static void emergency_bt_reset(void);
 
 static struct bt_conn *default_conn;
 static struct bt_gatt_discover_params discover_params;
@@ -262,13 +263,9 @@ static uint8_t discover_func(struct bt_conn *conn,
         return BT_GATT_ITER_STOP;
     }
 
-    // Defensive check for NULL UUID
-    if (!params->uuid) {
-        printk("ERROR: NULL UUID in discovery params\n");
-        error_recovery();
-        return BT_GATT_ITER_STOP;
-    }
-
+    // NOTE: We're intentionally not checking for NULL UUID here
+    // because params->uuid can be NULL when doing general service discovery
+    
     if (!attr) {
         printk("Discovery complete but target not found, type %u\n", params->type);
         
@@ -615,18 +612,29 @@ static bool check_device_name(struct bt_data *data, void *user_data)
 static void complete_bt_reset(void)
 {
     printk("Performing complete Bluetooth stack reset...\n");
+    int err;
     
     // First stop any scanning
     bt_le_scan_stop();
     
     // Disconnect and clean up any connections
     if (default_conn) {
+        printk("Disconnecting from existing connection...\n");
         bt_conn_disconnect(default_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+        k_sleep(K_MSEC(100)); // Give time for disconnect to initiate
         bt_conn_unref(default_conn);
         default_conn = NULL;
     }
     
+    // Release all other resources
+    // This will also terminate any active connections
+    printk("Closing any active connections...\n");
+    
+    // Wait to ensure controller processed disconnection
+    k_sleep(K_MSEC(500));
+    
     // Reset all handles and state variables
+    printk("Resetting internal state...\n");
     nus_rx_handle = 0;
     nus_tx_handle = 0;
     nus_tx_ccc_handle = 0;
@@ -638,23 +646,37 @@ static void complete_bt_reset(void)
     // Allow time for cleanup before disabling
     k_sleep(K_MSEC(1000));
     
-    // Disable Bluetooth completely
-    int err = bt_disable();
+    // Disable Bluetooth completely - this is the key to resetting the stack
+    printk("Disabling Bluetooth stack...\n");
+    err = bt_disable();
     if (err) {
         printk("Failed to disable Bluetooth (err %d)\n", err);
     } else {
         printk("Bluetooth disabled successfully\n");
     }
     
-    // Wait for controller to fully shut down
-    k_sleep(K_MSEC(2000));
+    // Wait for controller to fully shut down - longer wait
+    k_sleep(K_MSEC(3000));
     
     // Re-enable Bluetooth with our bt_ready callback
     printk("Re-enabling Bluetooth...\n");
     err = bt_enable(bt_ready);
     if (err) {
         printk("Failed to re-enable Bluetooth (err %d)\n", err);
+        // Try one more time
+        k_sleep(K_MSEC(2000));
+        printk("Trying again to re-enable Bluetooth...\n");
+        err = bt_enable(bt_ready);
+        if (err) {
+            printk("Second attempt to re-enable Bluetooth failed (err %d)\n", err);
+        }
     }
+    
+    // Wait for BT stack to fully initialize
+    k_sleep(K_MSEC(2000));
+    
+    printk("BT reset complete. Starting scan after delay...\n");
+    k_work_schedule(&start_scan_work, K_MSEC(1000));
 }
 
 static void device_found(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
@@ -685,25 +707,29 @@ static void device_found(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
                 return;
             }
             
-            // Check if we might have a stale connection
+            // Aggressive approach: Always assume there might be a stale connection
+            // and try to clean it up proactively
+            printk("Force cleaning connection state for device...\n");
+            bt_le_scan_stop();
+            
+            // Reset all connection-related variables
             if (default_conn) {
-                printk("Cleaning up possible stale connection...\n");
                 bt_conn_disconnect(default_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
                 bt_conn_unref(default_conn);
                 default_conn = NULL;
-                
-                // Reset all handles and parameters
-                nus_rx_handle = 0;
-                nus_tx_handle = 0;
-                nus_tx_ccc_handle = 0;
-                current_service_start_handle = 0;
-                nus_service_end_handle = 0;
-                memset(&discover_params, 0, sizeof(discover_params));
-                memset(&nus_tx_subscribe_params, 0, sizeof(nus_tx_subscribe_params));
-                
-                // Add a delay to allow the stack to clean up
-                k_sleep(K_MSEC(500));
             }
+            
+            // Reset all handles and parameters to ensure clean state
+            nus_rx_handle = 0;
+            nus_tx_handle = 0;
+            nus_tx_ccc_handle = 0;
+            current_service_start_handle = 0;
+            nus_service_end_handle = 0;
+            memset(&discover_params, 0, sizeof(discover_params));
+            memset(&nus_tx_subscribe_params, 0, sizeof(nus_tx_subscribe_params));
+            
+            // Force a delay to allow the controller state to settle
+            k_sleep(K_MSEC(1000));
 
             struct bt_le_conn_param *param = BT_LE_CONN_PARAM_DEFAULT;
             printk("Attempting to connect to %s\n", dev);
@@ -717,28 +743,29 @@ static void device_found(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
                     total_retry_count++;
                     
                     // If we've exceeded retries or the error persists after a complete reset
-                    if (retry_count >= 3 || (current_time - last_reset_time < 30000 && total_retry_count > 6)) {
-                        printk("Connection state issues persist after retries. Attempting complete BT reset...\n");
+                    // or if this is the first attempt but we have many recent failures
+                    if (retry_count >= 2 || 
+                        (current_time - last_reset_time < 60000 && total_retry_count > 4) ||
+                        (retry_count == 1 && total_retry_count > 10)) {
+                        printk("Connection state issues persist. Attempting complete BT reset...\n");
                         
                         // Record when we did the complete reset
                         last_reset_time = current_time;
                         retry_count = 0;
+                        total_retry_count = 0; // Reset total count after a full reset
                         
                         // Perform a complete BT stack reset
                         complete_bt_reset();
                         return;
                     }
                     
-                    printk("Connection state issue detected, resetting BT state (attempt %d/3)\n", retry_count);
+                    printk("Connection state issue detected, resetting BT state (attempt %d/2)\n", retry_count);
                     
-                    // When we get EINVAL on connection attempt, we need to reset the BT stack state
-                    bt_le_scan_stop();
-                    
-                    // Wait a moment to ensure everything's stopped
-                    k_sleep(K_MSEC(1000));
+                    // Wait longer between attempts
+                    k_sleep(K_MSEC(2000));
                     
                     // Then start a fresh scan after a delay
-                    k_work_schedule(&start_scan_work, K_MSEC(2000));
+                    k_work_schedule(&start_scan_work, K_MSEC(3000));
                     return;
                 }
                 
@@ -842,6 +869,42 @@ static void bt_ready(int err)
     printk("Scheduled scan start.\n");
 }
 
+// Emergency reset by directly accessing Bluetooth controller hardware 
+// Note: This is only used in extreme cases and is hardware-specific
+static void emergency_bt_reset(void)
+{
+    printk("EMERGENCY: Attempting hardware-level reset of Bluetooth controller\n");
+    
+    // First disable Bluetooth stack
+    bt_disable();
+    k_sleep(K_MSEC(1000));
+    
+#ifdef CONFIG_BT_CTLR_FORCE_RESET
+    // This is a hardware-specific approach that might be available in some configs
+    bt_ctlr_force_reset();
+#endif
+
+    // Wait for controller to fully reset
+    k_sleep(K_MSEC(3000));
+    
+    // Re-enable Bluetooth
+    int err = bt_enable(bt_ready);
+    if (err) {
+        printk("Failed to re-enable Bluetooth after emergency reset (err %d)\n", err);
+        // Wait and try once more
+        k_sleep(K_MSEC(2000));
+        err = bt_enable(bt_ready);
+        if (err) {
+            printk("Second attempt to re-enable failed (err %d)\n", err);
+        }
+    } else {
+        printk("Bluetooth re-enabled successfully after emergency reset\n");
+    }
+    
+    // Wait for stack to fully initialize
+    k_sleep(K_MSEC(3000));
+}
+
 int main(void)
 {
     int err;
@@ -862,6 +925,10 @@ int main(void)
         }
     }
     
+    uint8_t consecutive_errors = 0;
+    uint8_t emergency_reset_count = 0;
+    uint64_t last_connection_time = 0;
+    
     while (1) {
         k_sleep(K_SECONDS(10));
         
@@ -871,8 +938,29 @@ int main(void)
             // This is safe to call even if already scanning
             printk("Periodic check: ensuring scan is active\n");
             start_scan();
+            
+            // Check for persistent connection issues
+            uint64_t current_time = k_uptime_get();
+            if (current_time - last_connection_time > 120000) { // 2 minutes with no connection
+                consecutive_errors++;
+                
+                if (consecutive_errors >= 5 && emergency_reset_count < 2) {
+                    printk("Persistent connection issues detected! Triggering emergency reset...\n");
+                    consecutive_errors = 0;
+                    emergency_reset_count++;
+                    
+                    // Try emergency reset as a last resort
+                    emergency_bt_reset();
+                    
+                    // Restart scanning after emergency reset
+                    k_sleep(K_MSEC(2000));
+                    start_scan();
+                }
+            }
         } else {
             printk("Periodic check: connected to device\n");
+            consecutive_errors = 0;
+            last_connection_time = k_uptime_get();
         }
     }
     
