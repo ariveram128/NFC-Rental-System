@@ -38,11 +38,17 @@ static struct bt_uuid_128 nus_tx_uuid = BT_UUID_INIT_128(BT_UUID_NUS_TX_VAL);
 
 // Forward declarations
 static void start_scan(void);
+static int complete_bt_reset(void);
 static void bt_ready(int err);
 static uint8_t discover_func(struct bt_conn *conn,
                          const struct bt_gatt_attr *attr,
                          struct bt_gatt_discover_params *params);
 static void emergency_bt_reset(void);
+
+// Error recovery tracking
+static int consecutive_errors = 0;
+static int emergency_reset_count = 0;
+static int64_t last_connection_time = 0;
 
 static struct bt_conn *current_conn;
 static struct bt_gatt_discover_params discover_params;
@@ -88,8 +94,8 @@ static uint8_t nus_notify_callback(struct bt_conn *conn,
         
         // Process the data
         if (strstr(buffer, "RENTAL START") != NULL) {
-            printk("Rental data detected!\n");
-            // Process the rental data here
+        printk("Rental data detected!\n");
+        // Process the rental data here
         }
     }
 
@@ -220,7 +226,7 @@ static void connected(struct bt_conn *conn, uint8_t err)
 
     // Start service discovery
     memset(&discover_params, 0, sizeof(discover_params));
-    discover_params.uuid = &nus_uuid.uuid;
+    discover_params.uuid = (struct bt_uuid *)&nus_uuid;
     discover_params.func = discover_func;
     discover_params.start_handle = BT_ATT_FIRST_ATTRIBUTE_HANDLE;
     discover_params.end_handle = BT_ATT_LAST_ATTRIBUTE_HANDLE;
@@ -303,7 +309,7 @@ static uint8_t discover_func(struct bt_conn *conn,
             
             printk("Specific characteristic not found, trying general characteristic discovery\n");
             // Clear the UUID to find all characteristics in this service
-            memset(params, 0, sizeof(*params));
+        memset(params, 0, sizeof(*params));
             params->start_handle = current_service_start_handle;
             params->end_handle = nus_service_end_handle;
             params->type = BT_GATT_DISCOVER_CHARACTERISTIC;
@@ -349,13 +355,13 @@ static uint8_t discover_func(struct bt_conn *conn,
         }
         
         // Check if this is the NUS service
-        if (bt_uuid_cmp(service_val->uuid, &nus_uuid.uuid) == 0) {
+        if (bt_uuid_cmp(service_val->uuid, (const struct bt_uuid *)&nus_uuid) == 0) {
             printk("NUS service found - start: 0x%04x, end: 0x%04x\n",
-                   attr->handle, service_val->end_handle);
-                   
+               attr->handle, service_val->end_handle);
+        
             current_service_start_handle = attr->handle;
             nus_service_end_handle = service_val->end_handle;
-            
+
             // Search for characteristics within this service
             memset(params, 0, sizeof(*params));
             params->start_handle = attr->handle + 1;
@@ -367,7 +373,7 @@ static uint8_t discover_func(struct bt_conn *conn,
             params->uuid = &nus_rx_uuid.uuid;
             
             err = bt_gatt_discover(conn, params);
-            if (err) {
+        if (err) {
                 printk("Characteristic discovery failed (err %d)\n", err);
                 error_recovery();
             }
@@ -410,27 +416,21 @@ static uint8_t discover_func(struct bt_conn *conn,
             printk("\n");
             
             // Log the target UUIDs for comparison
-            if (nus_rx_uuid.type == BT_UUID_TYPE_128) {
-                struct bt_uuid_128 *rx_uuid = (struct bt_uuid_128 *)&nus_rx_uuid;
-                printk("Target RX UUID-128: ");
-                for (int i = 0; i < 16; i++) {
-                    printk("%02x", rx_uuid->val[i]);
-                }
-                printk("\n");
+            printk("Target RX UUID-128: ");
+            for (int i = 0; i < 16; i++) {
+                printk("%02x", nus_rx_uuid.val[i]);
             }
+            printk("\n");
             
-            if (nus_tx_uuid.type == BT_UUID_TYPE_128) {
-                struct bt_uuid_128 *tx_uuid = (struct bt_uuid_128 *)&nus_tx_uuid;
-                printk("Target TX UUID-128: ");
-                for (int i = 0; i < 16; i++) {
-                    printk("%02x", tx_uuid->val[i]);
-                }
-                printk("\n");
+            printk("Target TX UUID-128: ");
+            for (int i = 0; i < 16; i++) {
+                printk("%02x", nus_tx_uuid.val[i]);
             }
+            printk("\n");
         }
         
         // Check for RX characteristic UUID
-        if (bt_uuid_cmp(chrc->uuid, &nus_rx_uuid) == 0) {
+        if (bt_uuid_cmp(chrc->uuid, (const struct bt_uuid *)&nus_rx_uuid) == 0) {
             printk("Found RX characteristic\n");
             nus_rx_handle = attr->handle + 1;  // +1 because handle is for declaration
             printk("RX handle: 0x%04x\n", nus_rx_handle);
@@ -457,7 +457,7 @@ static uint8_t discover_func(struct bt_conn *conn,
             return BT_GATT_ITER_CONTINUE;
         }
         // Check for TX characteristic UUID
-        else if (bt_uuid_cmp(chrc->uuid, &nus_tx_uuid) == 0) {
+        else if (bt_uuid_cmp(chrc->uuid, (const struct bt_uuid *)&nus_tx_uuid) == 0) {
             printk("Found TX characteristic\n");
             nus_tx_handle = attr->handle + 1;  // +1 because handle is for declaration
             printk("TX handle: 0x%04x\n", nus_tx_handle);
@@ -512,7 +512,7 @@ static uint8_t discover_func(struct bt_conn *conn,
             printk("Descriptor handle out of expected range, continuing search\n");
             return BT_GATT_ITER_CONTINUE;
         }
-    
+
         nus_tx_ccc_handle = attr->handle;
         printk("Found CCC descriptor: handle 0x%04x\n", nus_tx_ccc_handle);
 
@@ -539,7 +539,7 @@ static uint8_t discover_func(struct bt_conn *conn,
         const int max_subscribe_retries = 5;
         
         while (subscribe_retries < max_subscribe_retries) {
-            err = bt_gatt_subscribe(conn, &nus_tx_subscribe_params);
+        err = bt_gatt_subscribe(conn, &nus_tx_subscribe_params);
             if (err == 0) {
                 printk("Subscribed successfully\n");
                 
@@ -559,7 +559,7 @@ static uint8_t discover_func(struct bt_conn *conn,
             } else if (err == -EALREADY) {
                 printk("Already subscribed\n");
                 break; // Already subscribed, this is fine
-            } else {
+        } else {
                 subscribe_retries++;
                 printk("Subscribe failed (err %d), retry %d/%d\n", 
                        err, subscribe_retries, max_subscribe_retries);
@@ -803,7 +803,7 @@ static void device_found(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
                 retry_count = 0;
                 start_scan();
             } else {
-                printk("Connection creation initiated.\n");
+                 printk("Connection creation initiated.\n");
                 retry_count = 0;
             }
         }
@@ -831,7 +831,7 @@ static void start_scan(void)
             k_sleep(K_MSEC(500));
         } else {
             printk("Scan not started: connection already exists\n");
-            return;
+        return;
         }
     }
 
@@ -846,8 +846,8 @@ static void start_scan(void)
 
     // Try multiple times if we get EAGAIN
     while (retry < max_retries) {
-        err = bt_le_scan_start(&scan_param, device_found);
-        if (err) {
+    err = bt_le_scan_start(&scan_param, device_found);
+    if (err) {
             if (err == -EAGAIN || err == -11) { // -11 is EAGAIN
                 retry++;
                 printk("Scan start temporarily failed (EAGAIN), retry %d/%d\n", 
@@ -859,7 +859,7 @@ static void start_scan(void)
                 printk("Scan already started\n");
                 break;
             } else {
-                printk("Scanning failed to start (err %d)\n", err);
+        printk("Scanning failed to start (err %d)\n", err);
                 // For other errors, back off and try again later
                 k_work_schedule(&start_scan_work, K_MSEC(2000));
                 return;
@@ -907,7 +907,7 @@ static void bt_ready(int err)
         settings_load();
         printk("Settings loaded\n");
     }
-    
+
     // Reset all connection state
     nus_rx_handle = 0;
     nus_tx_handle = 0;
@@ -961,7 +961,7 @@ static void emergency_bt_reset(void)
     k_sleep(K_MSEC(3000));
 }
 
-void main(void)
+int main(void)
 {
     int err;
 
@@ -971,7 +971,7 @@ void main(void)
     err = bt_enable(bt_ready);
     if (err) {
         printk("Bluetooth init failed (err %d)\n", err);
-        return;
+        return -1;
     }
 
     printk("Bluetooth initialized\n");
@@ -1025,4 +1025,6 @@ void main(void)
             last_connection_time = k_uptime_get();
         }
     }
+    
+    return 0;
 }
