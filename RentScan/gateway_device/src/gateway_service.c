@@ -16,6 +16,7 @@ LOG_MODULE_REGISTER(gateway_service, LOG_LEVEL_INF);
 /* Backend simulation settings */
 #define BACKEND_SIM_STORAGE_SIZE 16
 #define BACKEND_SIM_CHECK_INTERVAL_MS 10000  /* 10 second interval for connection checks */
+#define MAX_ACTIVE_RENTALS 8
 
 /* Simulated backend connection state */
 static bool backend_connected = false;
@@ -28,12 +29,15 @@ typedef struct {
     uint8_t message_count;
     uint32_t last_sent_timestamp;
     uint8_t config_values[MAX_CONFIG_VALUE_LEN];
+    rental_info_t active_rentals[MAX_ACTIVE_RENTALS];
+    uint8_t rental_count;
 } backend_sim_t;
 
 static backend_sim_t backend_sim = {
     .message_count = 0,
     .last_sent_timestamp = 0,
-    .config_values = {0}
+    .config_values = {0},
+    .rental_count = 0
 };
 
 /* Forward declarations */
@@ -66,6 +70,34 @@ static int settings_set(const char *name, size_t len, settings_read_cb read_cb, 
 
 SETTINGS_STATIC_HANDLER_DEFINE(gateway, CONFIG_PREFIX, NULL, settings_set, NULL, NULL);
 
+/* Check if a rental has expired based on current time */
+static bool rental_is_expired(const rental_info_t *rental)
+{
+    if (!rental || !rental->active) {
+        return false;
+    }
+    
+    uint32_t current_time = k_uptime_get_32() / 1000;
+    return (current_time > rental->start_time + rental->duration);
+}
+
+/* Find rental by item ID */
+static rental_info_t *find_rental_by_item_id(const char *item_id)
+{
+    if (!item_id) {
+        return NULL;
+    }
+    
+    for (int i = 0; i < backend_sim.rental_count; i++) {
+        if (strcmp(backend_sim.active_rentals[i].item_id, item_id) == 0 && 
+            backend_sim.active_rentals[i].active) {
+            return &backend_sim.active_rentals[i];
+        }
+    }
+    
+    return NULL;
+}
+
 /* Simulated backend connection check work handler */
 static void backend_sim_check_handler(struct k_work *work)
 {
@@ -90,6 +122,21 @@ static void backend_sim_check_handler(struct k_work *work)
         /* Clear the queue to simulate successful processing */
         backend_sim.message_count = 0;
         backend_sim.last_sent_timestamp = k_uptime_get_32();
+    }
+    
+    /* Check for expired rentals */
+    bool expired_found = false;
+    for (int i = 0; i < backend_sim.rental_count; i++) {
+        if (backend_sim.active_rentals[i].active && 
+            rental_is_expired(&backend_sim.active_rentals[i])) {
+            LOG_WRN("Rental for item %s has expired", 
+                   backend_sim.active_rentals[i].item_id);
+            expired_found = true;
+        }
+    }
+    
+    if (expired_found && backend_connected) {
+        LOG_INF("Simulating notification of expired rentals to backend");
     }
     
     /* Reschedule the work */
@@ -188,6 +235,143 @@ int gateway_service_process_message(const rentscan_msg_t *msg)
     }
 }
 
+int gateway_service_start_rental(const char *item_id, const char *user_id, uint32_t duration)
+{
+    if (!item_id || !user_id || duration == 0) {
+        return -EINVAL;
+    }
+    
+    /* Check if item is already rented */
+    rental_info_t *existing = find_rental_by_item_id(item_id);
+    if (existing) {
+        LOG_WRN("Item %s is already rented", item_id);
+        return -EBUSY;
+    }
+    
+    /* Check if we have space for a new rental */
+    if (backend_sim.rental_count >= MAX_ACTIVE_RENTALS) {
+        LOG_ERR("Maximum active rentals reached");
+        return -ENOSPC;
+    }
+    
+    /* Add the new rental */
+    rental_info_t *rental = &backend_sim.active_rentals[backend_sim.rental_count];
+    strncpy(rental->item_id, item_id, MAX_TAG_ID_LEN);
+    rental->item_id[MAX_TAG_ID_LEN] = '\0';
+    
+    strncpy(rental->user_id, user_id, sizeof(rental->user_id) - 1);
+    rental->user_id[sizeof(rental->user_id) - 1] = '\0';
+    
+    rental->start_time = k_uptime_get_32() / 1000;  /* Convert to seconds */
+    rental->duration = duration;
+    rental->active = true;
+    
+    backend_sim.rental_count++;
+    
+    LOG_INF("Rental started for item %s by user %s for %u seconds", 
+           item_id, user_id, duration);
+    
+    /* Create and send a message to the backend */
+    rentscan_msg_t msg = {
+        .cmd = CMD_RENTAL_START,
+        .status = STATUS_RENTED,
+        .tag_id_len = strlen(item_id),
+        .timestamp = rental->start_time,
+        .duration = duration,
+        .payload_len = strlen(user_id)
+    };
+    
+    /* Copy the tag ID and user ID */
+    memcpy(msg.tag_id, item_id, msg.tag_id_len);
+    memcpy(msg.payload, user_id, msg.payload_len);
+    
+    /* Process the message */
+    return gateway_service_process_message(&msg);
+}
+
+int gateway_service_end_rental(const char *item_id)
+{
+    if (!item_id) {
+        return -EINVAL;
+    }
+    
+    /* Find the rental */
+    rental_info_t *rental = find_rental_by_item_id(item_id);
+    if (!rental) {
+        LOG_WRN("No active rental found for item %s", item_id);
+        return -ENOENT;
+    }
+    
+    /* Calculate actual duration */
+    uint32_t end_time = k_uptime_get_32() / 1000;
+    uint32_t actual_duration = end_time - rental->start_time;
+    
+    /* Update rental status */
+    rental->active = false;
+    
+    LOG_INF("Rental ended for item %s (duration: %u seconds)", 
+           item_id, actual_duration);
+    
+    /* Create and send a message to the backend */
+    rentscan_msg_t msg = {
+        .cmd = CMD_RENTAL_END,
+        .status = STATUS_AVAILABLE,
+        .tag_id_len = strlen(item_id),
+        .timestamp = end_time,
+        .duration = actual_duration,
+        .payload_len = 0
+    };
+    
+    /* Copy the tag ID */
+    memcpy(msg.tag_id, item_id, msg.tag_id_len);
+    
+    /* Process the message */
+    return gateway_service_process_message(&msg);
+}
+
+int gateway_service_get_rental_status(const char *item_id, rentscan_status_t *status)
+{
+    if (!item_id || !status) {
+        return -EINVAL;
+    }
+    
+    /* Find the rental */
+    rental_info_t *rental = find_rental_by_item_id(item_id);
+    if (!rental) {
+        *status = STATUS_AVAILABLE;
+        return 0;
+    }
+    
+    /* Check if rental has expired */
+    if (rental_is_expired(rental)) {
+        *status = STATUS_EXPIRED;
+    } else {
+        *status = STATUS_RENTED;
+    }
+    
+    return 0;
+}
+
+int gateway_service_get_active_rentals(rental_info_t *rentals, size_t max_count, size_t *count)
+{
+    if (!rentals || !count || max_count == 0) {
+        return -EINVAL;
+    }
+    
+    *count = 0;
+    
+    /* Copy active rentals */
+    for (int i = 0; i < backend_sim.rental_count && *count < max_count; i++) {
+        if (backend_sim.active_rentals[i].active) {
+            memcpy(&rentals[*count], &backend_sim.active_rentals[i], 
+                  sizeof(rental_info_t));
+            (*count)++;
+        }
+    }
+    
+    return 0;
+}
+
 int gateway_service_request_status(const uint8_t *tag_id, size_t tag_id_len)
 {
     if (!tag_id || tag_id_len == 0 || tag_id_len > MAX_TAG_ID_LEN) {
@@ -279,6 +463,18 @@ int gateway_service_get_config(const char *config_key, char *config_value, size_
     /* Special case for queue stats */
     if (strcmp(config_key, "queue_count") == 0) {
         snprintf(config_value, config_value_len, "%d", backend_sim.message_count);
+        return strlen(config_value);
+    }
+    
+    /* Special case for active rental count */
+    if (strcmp(config_key, "rental_count") == 0) {
+        int active_count = 0;
+        for (int i = 0; i < backend_sim.rental_count; i++) {
+            if (backend_sim.active_rentals[i].active) {
+                active_count++;
+            }
+        }
+        snprintf(config_value, config_value_len, "%d", active_count);
         return strlen(config_value);
     }
     

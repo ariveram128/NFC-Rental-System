@@ -9,6 +9,15 @@
 #include <zephyr/types.h>
 #include "../../common/include/rentscan_protocol.h"
 
+/* Rental information structure */
+typedef struct {
+    char item_id[MAX_TAG_ID_LEN + 1];  /* Item ID string */
+    uint32_t start_time;               /* Start time in seconds (system uptime) */
+    uint32_t duration;                 /* Duration in seconds */
+    char user_id[16];                  /* User ID string */
+    bool active;                       /* Whether rental is active */
+} rental_info_t;
+
 /**
  * @brief Initialize the gateway service
  * 
@@ -25,6 +34,43 @@ int gateway_service_init(void);
  * @return int 0 on success, negative error code otherwise
  */
 int gateway_service_process_message(const rentscan_msg_t *msg);
+
+/**
+ * @brief Start a new rental
+ * 
+ * @param item_id Item ID string
+ * @param user_id User ID string
+ * @param duration Duration in seconds
+ * @return int 0 on success, negative error code otherwise
+ */
+int gateway_service_start_rental(const char *item_id, const char *user_id, uint32_t duration);
+
+/**
+ * @brief End an active rental
+ * 
+ * @param item_id Item ID string
+ * @return int 0 on success, negative error code otherwise
+ */
+int gateway_service_end_rental(const char *item_id);
+
+/**
+ * @brief Get rental status for an item
+ * 
+ * @param item_id Item ID string
+ * @param status Pointer to store status
+ * @return int 0 on success, negative error code otherwise
+ */
+int gateway_service_get_rental_status(const char *item_id, rentscan_status_t *status);
+
+/**
+ * @brief Get all active rentals
+ * 
+ * @param rentals Array to store rental info
+ * @param max_count Maximum number of rentals to store
+ * @param count Pointer to store actual number of rentals
+ * @return int 0 on success, negative error code otherwise
+ */
+int gateway_service_get_active_rentals(rental_info_t *rentals, size_t max_count, size_t *count);
 
 /**
  * @brief Request status for a tag from the backend

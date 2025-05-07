@@ -30,6 +30,8 @@ We've created a clean, modular structure that separates different parts of the s
 #### Rental Logic ✅
 - Created basic framework with placeholder implementation
 - Function definitions in place for future business logic
+- Added full rental simulation with start, end, and tracking features
+- Shell commands for managing rentals and viewing status
 
 #### Backend Simulation ✅
 - Implemented simulated backend connection in the gateway
@@ -92,7 +94,32 @@ Gateway Service Status:
   Backend Connected: yes
   Error Count: 0
   Message Queue: 0
+  Active Rentals: 2
 ```
+
+### Rental Management Commands
+The gateway device now supports rental simulation with these commands:
+
+```
+rentscan:~$ rentscan rental start 001 user123 300
+Rental started for item 001 by user user123 for 300 seconds
+
+rentscan:~$ rentscan rental list
+Active Rentals (1):
+  Item: 001
+    User: user123
+    Elapsed: 15 seconds
+    Remaining: 285 seconds
+    Status: Active
+
+rentscan:~$ rentscan rental end 001
+Rental ended for item 001
+```
+
+These commands provide a complete simulation of the rental process:
+- `rental start <item_id> <user_id> <duration>` - Start a new rental
+- `rental end <item_id>` - End an active rental
+- `rental list` - Show all active rentals with status
 
 ## Next Steps
 
@@ -120,7 +147,13 @@ Gateway Service Status:
 - Add commands to control backend connection
 - Provide status reporting
 
-### 5. Testing and Integration
+### 5. Rental Simulation ✅
+- Add rental tracking with expiration monitoring
+- Implement shell commands for manual rental management
+- Track active rentals with timestamps and durations
+- Display detailed rental status information
+
+### 6. Testing and Integration
 - Test NFC reading independently ✅
 - Test BLE communication separately ✅
 - Integrate both components ✅
@@ -159,6 +192,12 @@ Gateway Service Status:
 - Configured using the internal NFCT peripheral
 - Event-driven architecture with callbacks
 - Currently simulates tag data reading
+
+### Rental System
+- Tracks rentals with item ID, user ID, start time, and duration
+- Monitors for expired rentals and generates notifications
+- Maintains rental state across backend disconnections
+- Provides detailed status reporting for active rentals
 
 ### Backend Simulation
 - Simulates a backend service connection

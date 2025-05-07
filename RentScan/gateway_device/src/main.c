@@ -247,6 +247,12 @@ static int cmd_status(const struct shell *shell, size_t argc, char *argv[])
         shell_print(shell, "  Message Queue: %s", queue_count);
     }
     
+    /* Get active rental count */
+    char rental_count[16] = {0};
+    if (gateway_service_get_config("rental_count", rental_count, sizeof(rental_count)) > 0) {
+        shell_print(shell, "  Active Rentals: %s", rental_count);
+    }
+    
     return 0;
 }
 
@@ -289,6 +295,115 @@ static int cmd_reset_errors(const struct shell *shell, size_t argc, char *argv[]
     return 0;
 }
 
+/* Shell command to start a rental */
+static int cmd_rental_start(const struct shell *shell, size_t argc, char *argv[])
+{
+    if (argc < 4) {
+        shell_print(shell, "Usage: rental start <item_id> <user_id> <duration_seconds>");
+        return -EINVAL;
+    }
+    
+    const char *item_id = argv[1];
+    const char *user_id = argv[2];
+    uint32_t duration = strtoul(argv[3], NULL, 10);
+    
+    int err = gateway_service_start_rental(item_id, user_id, duration);
+    if (err) {
+        if (err == -EBUSY) {
+            shell_error(shell, "Item %s is already rented", item_id);
+        } else {
+            shell_error(shell, "Failed to start rental: %d", err);
+        }
+        return err;
+    }
+    
+    shell_print(shell, "Rental started for item %s by user %s for %u seconds", 
+               item_id, user_id, duration);
+    return 0;
+}
+
+/* Shell command to end a rental */
+static int cmd_rental_end(const struct shell *shell, size_t argc, char *argv[])
+{
+    if (argc != 2) {
+        shell_print(shell, "Usage: rental end <item_id>");
+        return -EINVAL;
+    }
+    
+    const char *item_id = argv[1];
+    
+    int err = gateway_service_end_rental(item_id);
+    if (err) {
+        if (err == -ENOENT) {
+            shell_error(shell, "No active rental found for item %s", item_id);
+        } else {
+            shell_error(shell, "Failed to end rental: %d", err);
+        }
+        return err;
+    }
+    
+    shell_print(shell, "Rental ended for item %s", item_id);
+    return 0;
+}
+
+/* Shell command to list active rentals */
+static int cmd_rental_list(const struct shell *shell, size_t argc, char *argv[])
+{
+    rental_info_t rentals[8];
+    size_t count = 0;
+    
+    int err = gateway_service_get_active_rentals(rentals, ARRAY_SIZE(rentals), &count);
+    if (err) {
+        shell_error(shell, "Failed to get active rentals: %d", err);
+        return err;
+    }
+    
+    if (count == 0) {
+        shell_print(shell, "No active rentals");
+        return 0;
+    }
+    
+    shell_print(shell, "Active Rentals (%zu):", count);
+    for (size_t i = 0; i < count; i++) {
+        const rental_info_t *rental = &rentals[i];
+        uint32_t current_time = k_uptime_get_32() / 1000;
+        uint32_t elapsed = current_time - rental->start_time;
+        uint32_t remaining = (elapsed < rental->duration) ? 
+                              (rental->duration - elapsed) : 0;
+        
+        shell_print(shell, "  Item: %s", rental->item_id);
+        shell_print(shell, "    User: %s", rental->user_id);
+        shell_print(shell, "    Elapsed: %u seconds", elapsed);
+        shell_print(shell, "    Remaining: %u seconds", remaining);
+        shell_print(shell, "    Status: %s", 
+                  remaining > 0 ? "Active" : "Expired");
+    }
+    
+    return 0;
+}
+
+/* Shell command for rental management */
+static int cmd_rental(const struct shell *shell, size_t argc, char *argv[])
+{
+    if (argc == 1) {
+        shell_error(shell, "Missing subcommand");
+        shell_print(shell, "Usage: rental <start|end|list>");
+        return -EINVAL;
+    }
+    
+    if (strcmp(argv[1], "start") == 0) {
+        return cmd_rental_start(shell, argc - 1, &argv[1]);
+    } else if (strcmp(argv[1], "end") == 0) {
+        return cmd_rental_end(shell, argc - 1, &argv[1]);
+    } else if (strcmp(argv[1], "list") == 0) {
+        return cmd_rental_list(shell, argc - 1, &argv[1]);
+    } else {
+        shell_error(shell, "Unknown subcommand: %s", argv[1]);
+        shell_print(shell, "Usage: rental <start|end|list>");
+        return -EINVAL;
+    }
+}
+
 /* Define shell commands */
 SHELL_STATIC_SUBCMD_SET_CREATE(whitelist_cmds,
     SHELL_CMD(add, NULL, "Add device to whitelist", cmd_whitelist_add),
@@ -317,6 +432,7 @@ SHELL_STATIC_SUBCMD_SET_CREATE(sub_cmds,
     SHELL_CMD(status, NULL, "Show status", cmd_status),
     SHELL_CMD(backend, NULL, "Control backend connection", cmd_backend),
     SHELL_CMD(reset_errors, NULL, "Reset error count", cmd_reset_errors),
+    SHELL_CMD(rental, NULL, "Manage rentals", cmd_rental),
     SHELL_SUBCMD_SET_END
 );
 
