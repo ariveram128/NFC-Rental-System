@@ -38,20 +38,27 @@ This guide provides step-by-step instructions to demo the RentScan NFC-based ren
 
 1. Observe the Gateway device logs:
    ```
-   [xx:xx:xx.xxx,xxx] <inf> ble_central: Scanning started successfully
-   [xx:xx:xx.xxx,xxx] <inf> ble_central: Found RentScan device xx:xx:xx:xx:xx:xx, RSSI -xx
-   [xx:xx:xx.xxx,xxx] <inf> ble_central: Connection pending
-   [xx:xx:xx.xxx,xxx] <inf> ble_central: Connected to device xx:xx:xx:xx:xx:xx
-   [xx:xx:xx.xxx,xxx] <inf> ble_central: Service discovery completed
+   [00:00:00.115,478] <inf> ble_central: Scanning started successfully
+   [00:00:00.160,095] <inf> ble_central: Found RentScan device FC:4E:16:98:0D:96, RSSI -65
+   [00:00:00.161,071] <inf> ble_central: Connection pending
+   [00:00:00.789,428] <inf> ble_central: Connected to device FC:4E:16:98:0D:96
    ```
 
 2. Observe the Main device logs:
    ```
-   [xx:xx:xx.xxx,xxx] <inf> ble_service: Device connected
+   [00:00:29.935,760] <inf> ble_service: Connected
+   ```
+
+3. **CRITICAL**: Wait for the GATT subscription to complete. You must see this on the gateway:
+   ```
+   [xx:xx:xx.xxx,xxx] <inf> ble_central: Service discovery completed
+   ```
+   And this on the main device:
+   ```
    [xx:xx:xx.xxx,xxx] <inf> ble_service: Client subscribed to notifications
    ```
 
-**IMPORTANT**: Ensure BLE connection is established before proceeding. If not connected, reset both devices and wait for connection to establish.
+**IMPORTANT**: Ensure BLE connection is fully established including service discovery and subscription before proceeding. If not fully connected, reset both devices and wait for the complete connection sequence.
 
 ### Step 3: Scan an NFC tag for the first time (start rental)
 
@@ -106,6 +113,21 @@ If devices are not connecting:
    [xx:xx:xx.xxx,xxx] <inf> ble_central: Scanning started successfully
    ```
 
+### GATT Subscription Error
+
+If you see this error:
+```
+[00:01:04.224,029] <wrn> bt_gatt: Device is not subscribed to characteristic
+[00:01:04.224,060] <err> main: Failed to send tag data via BLE: -22
+```
+
+This is a critical error indicating that although the BLE connection is established, the gateway has not completed the GATT service discovery and subscription process. To fix:
+
+1. Reset both devices using the reset button on the boards
+2. After connecting, wait at least 10-15 seconds before scanning any NFC tags
+3. In the gateway log, you MUST see "Service discovery completed" before proceeding
+4. If the issue persists, try increasing the BLE connection interval in `gateway_config.h`
+
 ### NFC Tag Detection Issues
 
 If tags are not detected:
@@ -114,19 +136,17 @@ If tags are not detected:
    ```
    [xx:xx:xx.xxx,xxx] <inf> nfc_handler: NFC initialized
    ```
+3. Try with different tag types if available
 
-### Failed to Send Tag Data
+### Simulated Backend Connection
 
-If you see this error:
+The gateway device simulates backend connection cycles. You'll see these messages periodically:
 ```
-[xx:xx:xx.xxx,xxx] <wrn> bt_gatt: Device is not subscribed to characteristic
-[xx:xx:xx.xxx,xxx] <err> main: Failed to send tag data via BLE: -22
+[00:00:10.009,490] <wrn> gateway_service: Backend connection lost
+[00:00:20.009,582] <inf> gateway_service: Backend connection established
 ```
 
-The BLE connection may be partially established. Try:
-1. Reset both devices
-2. Wait for full connection sequence to complete before scanning tags
-3. Verify subscription status in logs
+This is normal and part of the simulation. The system will queue messages when the backend is disconnected.
 
 ## Command Reference
 
