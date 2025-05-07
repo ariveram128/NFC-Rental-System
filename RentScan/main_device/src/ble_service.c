@@ -132,8 +132,8 @@ int ble_service_start_advertising(bool fast)
     if (fast) {
         static const struct bt_le_adv_param fast_param = BT_LE_ADV_PARAM_INIT(
             BT_LE_ADV_OPT_CONNECTABLE | BT_LE_ADV_OPT_USE_NAME,
-            BT_GAP_ADV_FAST_INT_MIN,  /* 20ms */
-            BT_GAP_ADV_FAST_INT_MAX,  /* 30ms */
+            BT_GAP_ADV_FAST_INT_MIN_2,  /* 100ms */
+            BT_GAP_ADV_FAST_INT_MAX_2,  /* 150ms */
             NULL);
         param = (struct bt_le_adv_param *)&fast_param;
     } else {
