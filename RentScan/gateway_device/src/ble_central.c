@@ -43,24 +43,76 @@ static uint8_t notify_handler(struct bt_conn *conn,
     return BT_GATT_ITER_CONTINUE;
 }
 
+static bool check_device(struct bt_data *data, void *user_data)
+{
+    bool *found = (bool *)user_data;
+    
+    if (data->type == BT_DATA_NAME_COMPLETE) {
+        if (data->data_len == strlen(RENTSCAN_DEVICE_NAME) &&
+            memcmp(data->data, RENTSCAN_DEVICE_NAME, data->data_len) == 0) {
+            *found = true;
+        }
+    } else if (data->type == BT_DATA_UUID128_ALL) {
+        uint8_t uuid[] = {
+            BT_UUID_128_ENCODE(0x18ee2ef5, 0x263d, 0x4559, 0x953c, 0xd66077c89ae6)
+        };
+        if (data->data_len >= 16 && memcmp(data->data, uuid, 16) == 0) {
+            *found = true;
+        }
+    }
+    return true;
+}
+
 static void device_found(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
-			 struct net_buf_simple *ad)
+                        struct net_buf_simple *ad)
 {
     char addr_str[BT_ADDR_LE_STR_LEN];
     bt_addr_le_to_str(addr, addr_str, sizeof(addr_str));
+    int err;
 
-    // Check if this is a RentScan device
+    // Only look for connectable advertising
     if (type != BT_GAP_ADV_TYPE_ADV_IND &&
         type != BT_GAP_ADV_TYPE_ADV_DIRECT_IND) {
         return;
     }
 
+    // Check if this is a RentScan device
+    bool found = false;
+    bt_data_parse(ad, check_device, &found);
+    
+    if (!found) {
+        return;
+    }
+
+    LOG_INF("Found RentScan device %s, RSSI %d", addr_str, rssi);
+
+    // Stop scanning
+    err = bt_le_scan_stop();
+    if (err) {
+        LOG_ERR("Stop scan failed (err %d)", err);
+        return;
+    }
+
+    // Create connection parameters
+    struct bt_conn_le_create_param create_param = BT_CONN_LE_CREATE_PARAM_INIT(
+        BT_CONN_LE_OPT_NONE,
+        BT_GAP_SCAN_FAST_INTERVAL,
+        BT_GAP_SCAN_FAST_WINDOW);
+
+    // Connection parameters
+    struct bt_le_conn_param conn_param = {
+        .interval_min = BT_GAP_INIT_CONN_INT_MIN,
+        .interval_max = BT_GAP_INIT_CONN_INT_MAX,
+        .latency = 0,
+        .timeout = BLE_CONN_SUPERVISION_TIMEOUT
+    };
+
     // Connect to device
-    int err = bt_conn_le_create(addr, BT_CONN_LE_CREATE_CONN,
-                               BT_LE_CONN_PARAM_DEFAULT,
-                               &current_conn);
+    err = bt_conn_le_create(addr, &create_param, &conn_param, &current_conn);
     if (err) {
         LOG_ERR("Create connection failed (err %d)", err);
+        scanning = false;
+        start_scan();
         return;
     }
 

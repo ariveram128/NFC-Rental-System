@@ -24,11 +24,13 @@ static ssize_t on_receive(struct bt_conn *conn,
                          uint16_t len,
                          uint16_t offset,
                          uint8_t flags);
+static void send_response(void);
 
 /* Advertising data */
 static const struct bt_data ad[] = {
     BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
-    BT_DATA(BT_DATA_NAME_COMPLETE, CONFIG_BT_DEVICE_NAME, sizeof(CONFIG_BT_DEVICE_NAME) - 1),
+    BT_DATA(BT_DATA_NAME_COMPLETE, RENTSCAN_DEVICE_NAME, sizeof(RENTSCAN_DEVICE_NAME) - 1),
+    BT_DATA_BYTES(BT_DATA_UUID128_ALL, BT_UUID_128_ENCODE(0x18ee2ef5, 0x263d, 0x4559, 0x953c, 0xd66077c89ae6))
 };
 
 /* Service Declaration */
@@ -75,6 +77,14 @@ static void tx_ccc_changed(const struct bt_gatt_attr *attr, uint16_t value)
 {
     bool notifications_enabled = (value == BT_GATT_CCC_NOTIFY);
     LOG_INF("Notifications %s", notifications_enabled ? "enabled" : "disabled");
+}
+
+static void send_response(void)
+{
+    if (tx_buffer_len > 0) {
+        bt_gatt_notify(NULL, &rentscan_svc.attrs[2], tx_buffer, tx_buffer_len);
+        tx_buffer_len = 0;
+    }
 }
 
 static ssize_t on_receive(struct bt_conn *conn,
