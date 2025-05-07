@@ -238,7 +238,7 @@ static int cmd_status(const struct shell *shell, size_t argc, char *argv[])
     
     shell_print(shell, "Gateway Service Status:");
     shell_print(shell, "  Backend Connected: %s", gateway_service_is_connected() ? "yes" : "no");
-    shell_print(shell, "  Error Count: %d", consecutive_errors);
+    shell_print(shell, "  Error Count: %d", gateway_service_get_error_count());
     
     return 0;
 }

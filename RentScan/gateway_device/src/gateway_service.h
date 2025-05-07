@@ -62,4 +62,11 @@ int gateway_service_set_config(const char *config_key, const char *config_value)
  */
 int gateway_service_get_config(const char *config_key, char *config_value, size_t config_value_len);
 
+/**
+ * @brief Get error count for gateway service
+ * 
+ * @return uint32_t Number of errors encountered
+ */
+uint32_t gateway_service_get_error_count(void);
+
 #endif /* GATEWAY_SERVICE_H */ 
