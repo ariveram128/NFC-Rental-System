@@ -5,6 +5,7 @@
 
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/settings/settings.h>
 #include <string.h>
 
 #include "../include/main_device_config.h"
@@ -118,7 +119,7 @@ static void expiry_check_work_handler(struct k_work *work)
                             K_SECONDS(RENTAL_EXPIRY_CHECK_PERIOD));
 }
 
-void main(void)
+int main(void)
 {
     int err;
     
@@ -132,28 +133,43 @@ void main(void)
     err = rental_manager_init(rental_status_changed_handler);
     if (err) {
         LOG_ERR("Failed to initialize rental manager: %d", err);
-        return;
+        return err;
     }
     
     /* Initialize the BLE service */
     err = ble_service_init(ble_data_received_handler);
     if (err) {
         LOG_ERR("Failed to initialize BLE service: %d", err);
-        return;
+        return err;
     }
+
+    /* Load settings - required for BLE address */
+    if (IS_ENABLED(CONFIG_SETTINGS)) {
+        settings_load();
+    }
+
+    /* Wait for BLE stack to fully initialize */
+    k_sleep(K_MSEC(100));
     
     /* Initialize the NFC handler */
     err = nfc_handler_init(tag_detected_handler);
     if (err) {
         LOG_ERR("Failed to initialize NFC handler: %d", err);
-        return;
+        return err;
     }
     
-    /* Start BLE advertising */
+    /* Start BLE advertising with retry on EAGAIN */
     err = ble_service_start_advertising(true);
     if (err) {
-        LOG_ERR("Failed to start advertising: %d", err);
-        /* Continue anyway */
+        if (err == -EAGAIN) {
+            LOG_WRN("BLE stack busy, retrying advertising in 2s...");
+            k_sleep(K_MSEC(2000));
+            err = ble_service_start_advertising(true);
+        }
+        if (err) {
+            LOG_ERR("Failed to start advertising: %d", err);
+            /* Continue anyway */
+        }
     }
     
     /* Start NFC polling */
@@ -170,4 +186,5 @@ void main(void)
     LOG_INF("RentScan main device initialized");
     
     /* Application is now running - Zephyr will handle the threads */
-} 
+    return 0;
+}

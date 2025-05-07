@@ -297,12 +297,30 @@ int main(void)
         LOG_ERR("Failed to initialize BLE central: %d", err);
         return -1;
     }
+
+    /* Load settings - required for BLE address */
+    if (IS_ENABLED(CONFIG_SETTINGS)) {
+        settings_load();
+        LOG_INF("Settings loaded");
+    }
+    
+    /* Wait for BLE stack to fully initialize */
+    k_sleep(K_MSEC(100));
     
     /* Start scanning for devices */
     err = ble_central_start_scan();
     if (err) {
-        LOG_ERR("Failed to start scanning: %d", err);
-        /* Continue anyway */
+        if (err == -EAGAIN) {
+            LOG_WRN("BLE stack busy, retrying scan in 2s...");
+            k_sleep(K_MSEC(2000));
+            err = ble_central_start_scan();
+            if (err) {
+                LOG_ERR("Second scan attempt failed: %d", err);
+            }
+        } else {
+            LOG_ERR("Failed to start scanning: %d", err);
+        }
+        /* Continue execution regardless of scan error */
     }
     
     /* Schedule health check */
@@ -312,4 +330,4 @@ int main(void)
     LOG_INF("RentScan gateway initialized");
     
     return 0;
-} 
+}

@@ -1,0 +1,326 @@
+#include <zephyr/kernel.h>
+#include <zephyr/bluetooth/bluetooth.h>
+#include <zephyr/bluetooth/hci.h>
+#include <zephyr/bluetooth/conn.h>
+#include <zephyr/bluetooth/uuid.h>
+#include <zephyr/bluetooth/gatt.h>
+#include <zephyr/logging/log.h>
+#include <bluetooth/gatt_dm.h>
+#include <bluetooth/scan.h>
+#include "ble_central.h"
+#include "../include/gateway_config.h"
+#include "../../common/include/rentscan_protocol.h"
+
+LOG_MODULE_REGISTER(ble_central, LOG_LEVEL_INF);
+
+static struct bt_conn *current_conn;
+static struct bt_gatt_discover_params discover_params;
+static struct bt_gatt_subscribe_params subscribe_params;
+static uint16_t nus_rx_handle;
+static uint16_t nus_tx_handle;
+
+static ble_msg_received_cb_t msg_callback;
+static bool scanning = false;
+static int consecutive_errors = 0;
+
+static void start_scan(void);
+static void error_recovery(void);
+
+static uint8_t notify_handler(struct bt_conn *conn,
+                          struct bt_gatt_subscribe_params *params,
+                          const void *data, uint16_t length)
+{
+    if (!data) {
+        LOG_INF("Unsubscribed from notifications");
+        params->value_handle = 0;
+        return BT_GATT_ITER_STOP;
+    }
+
+    if (msg_callback && length >= sizeof(rentscan_msg_t)) {
+        msg_callback((const rentscan_msg_t *)data);
+    }
+
+    return BT_GATT_ITER_CONTINUE;
+}
+
+static void device_found(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
+			 struct net_buf_simple *ad)
+{
+    char addr_str[BT_ADDR_LE_STR_LEN];
+    bt_addr_le_to_str(addr, addr_str, sizeof(addr_str));
+
+    // Check if this is a RentScan device
+    if (type != BT_GAP_ADV_TYPE_ADV_IND &&
+        type != BT_GAP_ADV_TYPE_ADV_DIRECT_IND) {
+        return;
+    }
+
+    // Connect to device
+    int err = bt_conn_le_create(addr, BT_CONN_LE_CREATE_CONN,
+                               BT_LE_CONN_PARAM_DEFAULT,
+                               &current_conn);
+    if (err) {
+        LOG_ERR("Create connection failed (err %d)", err);
+        return;
+    }
+
+    LOG_INF("Connection pending");
+}
+
+static uint8_t discover_func(struct bt_conn *conn,
+                         const struct bt_gatt_attr *attr,
+                         struct bt_gatt_discover_params *params)
+{
+    int err;
+
+    if (!attr) {
+        LOG_INF("Discover complete");
+        (void)memset(params, 0, sizeof(*params));
+        return BT_GATT_ITER_STOP;
+    }
+
+    LOG_INF("[ATTRIBUTE] handle %u", attr->handle);
+
+    if (!bt_uuid_cmp(discover_params.uuid, BT_UUID_RENTSCAN)) {
+        discover_params.uuid = BT_UUID_RENTSCAN_RX;
+        discover_params.start_handle = attr->handle + 1;
+        discover_params.type = BT_GATT_DISCOVER_CHARACTERISTIC;
+
+        err = bt_gatt_discover(conn, &discover_params);
+        if (err) {
+            LOG_ERR("Discover failed (err %d)", err);
+        }
+    } else if (!bt_uuid_cmp(discover_params.uuid, BT_UUID_RENTSCAN_RX)) {
+        nus_rx_handle = bt_gatt_attr_value_handle(attr);
+        discover_params.uuid = BT_UUID_RENTSCAN_TX;
+        discover_params.start_handle = attr->handle + 1;
+        discover_params.type = BT_GATT_DISCOVER_CHARACTERISTIC;
+
+        err = bt_gatt_discover(conn, &discover_params);
+        if (err) {
+            LOG_ERR("Discover failed (err %d)", err);
+        }
+    } else if (!bt_uuid_cmp(discover_params.uuid, BT_UUID_RENTSCAN_TX)) {
+        nus_tx_handle = bt_gatt_attr_value_handle(attr);
+
+        subscribe_params.notify = notify_handler;
+        subscribe_params.value = BT_GATT_CCC_NOTIFY;
+        subscribe_params.value_handle = nus_tx_handle;
+        subscribe_params.ccc_handle = attr->handle + 2;
+
+        err = bt_gatt_subscribe(conn, &subscribe_params);
+        if (err && err != -EALREADY) {
+            LOG_ERR("Subscribe failed (err %d)", err);
+        }
+
+        return BT_GATT_ITER_STOP;
+    }
+
+    return BT_GATT_ITER_STOP;
+}
+
+static void connected(struct bt_conn *conn, uint8_t err)
+{
+    char addr[BT_ADDR_LE_STR_LEN];
+    bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
+
+    if (err) {
+        LOG_ERR("Failed to connect to %s (%u)", addr, err);
+        scanning = false;
+        start_scan();
+        return;
+    }
+
+    LOG_INF("Connected to device %s", addr);
+    current_conn = bt_conn_ref(conn);
+    consecutive_errors = 0;
+
+    discover_params.uuid = BT_UUID_RENTSCAN;
+    discover_params.func = discover_func;
+    discover_params.start_handle = BT_ATT_FIRST_ATTRIBUTE_HANDLE;
+    discover_params.end_handle = BT_ATT_LAST_ATTRIBUTE_HANDLE;
+    discover_params.type = BT_GATT_DISCOVER_PRIMARY;
+
+    err = bt_gatt_discover(conn, &discover_params);
+    if (err) {
+        LOG_ERR("Service discovery failed (err %d)", err);
+        error_recovery();
+    }
+}
+
+static void disconnected(struct bt_conn *conn, uint8_t reason)
+{
+    char addr[BT_ADDR_LE_STR_LEN];
+    bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
+
+    LOG_INF("Disconnected from %s (reason 0x%02x)", addr, reason);
+
+    if (conn == current_conn) {
+        bt_conn_unref(current_conn);
+        current_conn = NULL;
+        nus_rx_handle = 0;
+        nus_tx_handle = 0;
+    }
+
+    scanning = false;
+    start_scan();
+}
+
+BT_CONN_CB_DEFINE(conn_callbacks) = {
+    .connected = connected,
+    .disconnected = disconnected,
+};
+
+static void start_scan(void)
+{
+    int err;
+
+    if (scanning) {
+        return;
+    }
+
+    // Configure scan parameters
+    struct bt_le_scan_param scan_param = {
+        .type = BT_LE_SCAN_TYPE_ACTIVE,
+        .interval = BLE_SCAN_INTERVAL,
+        .window = BLE_SCAN_WINDOW,
+        .options = BT_LE_SCAN_OPT_FILTER_DUPLICATE
+    };
+
+    err = bt_le_scan_start(&scan_param, device_found);
+    if (err) {
+        LOG_ERR("Starting scanning failed (err %d)", err);
+        return;
+    }
+
+    scanning = true;
+    LOG_INF("Scanning started");
+}
+
+static void error_recovery(void)
+{
+    consecutive_errors++;
+    
+    if (consecutive_errors >= GATEWAY_ERROR_RESET_THRESHOLD) {
+        LOG_WRN("Too many consecutive errors, resetting BLE");
+        consecutive_errors = 0;
+        ble_central_reset();
+    } else {
+        if (current_conn) {
+            bt_conn_disconnect(current_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+        }
+        scanning = false;
+        start_scan();
+    }
+}
+
+int ble_central_init(ble_msg_received_cb_t msg_received_cb)
+{
+    int err;
+
+    msg_callback = msg_received_cb;
+
+    err = bt_enable(NULL);
+    if (err) {
+        LOG_ERR("Bluetooth init failed (err %d)", err);
+        return err;
+    }
+
+    LOG_INF("Bluetooth initialized");
+    return 0;
+}
+
+int ble_central_start_scan(void)
+{
+    if (!scanning) {
+        start_scan();
+    }
+    return 0;
+}
+
+int ble_central_stop_scan(void)
+{
+    if (scanning) {
+        int err = bt_le_scan_stop();
+        if (err) {
+            LOG_ERR("Stopping scanning failed (err %d)", err);
+            return err;
+        }
+        scanning = false;
+    }
+    return 0;
+}
+
+int ble_central_send_message(const rentscan_msg_t *msg)
+{
+    if (!current_conn || !nus_rx_handle) {
+        return -ENOTCONN;
+    }
+
+    return bt_gatt_write_without_response(current_conn, nus_rx_handle,
+                                        msg, sizeof(*msg), false);
+}
+
+int ble_central_disconnect(void)
+{
+    if (current_conn) {
+        return bt_conn_disconnect(current_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+    }
+    return 0;
+}
+
+int ble_central_reset(void)
+{
+    ble_central_disconnect();
+    bt_disable();
+    k_sleep(K_MSEC(1000));
+    return bt_enable(NULL);
+}
+
+bool ble_central_is_connected(void)
+{
+    return current_conn != NULL;
+}
+
+int ble_central_get_conn_stats(int8_t *rssi, int8_t *tx_power, uint16_t *conn_interval)
+{
+    if (!current_conn) {
+        return -ENOTCONN;
+    }
+
+    struct bt_conn_info info;
+    int err = bt_conn_get_info(current_conn, &info);
+    if (err) {
+        return err;
+    }
+
+    if (conn_interval) {
+        *conn_interval = info.le.interval;
+    }
+
+    if (rssi) {
+        *rssi = 0; // Placeholder, would need HCI command
+    }
+    if (tx_power) {
+        *tx_power = 0; // Placeholder, would need HCI command
+    }
+
+    return 0;
+}
+
+int ble_central_add_to_whitelist(const char *addr_str)
+{
+    // Replace whitelist with filter accept list
+    bt_addr_le_t addr;
+    int err = bt_addr_le_from_str(addr_str, "random", &addr);
+    if (err) {
+        return err;
+    }
+    return bt_le_filter_accept_list_add(&addr);
+}
+
+int ble_central_clear_whitelist(void)
+{
+    // Replace whitelist with filter accept list
+    return bt_le_filter_accept_list_clear();
+}
