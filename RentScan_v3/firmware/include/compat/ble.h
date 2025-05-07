@@ -145,7 +145,7 @@ typedef struct {
  */
 typedef enum {
     BLE_GAP_EVT_CONNECTED = 1,       /**< Connection established. */
-    BLE_GAP_EVT_DISCONNECTED         /**< Connection terminated. */
+    BLE_GAP_EVT_DISCONNECTED = 3     /**< Connection terminated. Changed from 2 to 3 to avoid conflict with BLE_GATTS_EVT_WRITE */
 } ble_gap_evt_type_t;
 
 /**
